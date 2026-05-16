@@ -12,6 +12,7 @@ import {
   scanForProjects,
   syncProjects,
 } from '../src/projects';
+import { CodeGraph } from '../src';
 
 function createTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'monorepo-test-'));
@@ -185,5 +186,108 @@ describe('Projects Registry', () => {
       expect(result).toContain('legacy/manual');
       expect(result).toContain('packages/foo');
     });
+  });
+});
+
+// ───────────────────────────────────────────────────────
+// Integration tests — these go AFTER the existing tests
+// ───────────────────────────────────────────────────────
+
+describe('Monorepo Integration', () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'monorepo-int-'));
+  });
+
+  afterEach(() => {
+    if (fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should init sub-projects and register them', () => {
+    // Create monorepo structure
+    const packagesFoo = path.join(tempDir, 'packages/foo');
+    const packagesBar = path.join(tempDir, 'packages/bar');
+    fs.mkdirSync(packagesFoo, { recursive: true });
+    fs.mkdirSync(packagesBar, { recursive: true });
+
+    // Init root project
+    const rootCg = CodeGraph.initSync(tempDir);
+    rootCg.close();
+
+    // Init sub-projects
+    const fooCg = CodeGraph.initSync(packagesFoo);
+    fooCg.close();
+    const barCg = CodeGraph.initSync(packagesBar);
+    barCg.close();
+
+    // Register sub-projects
+    addProject(tempDir, 'packages/foo');
+    addProject(tempDir, 'packages/bar');
+
+    // Verify
+    const projects = loadProjects(tempDir);
+    expect(projects).toContain('packages/foo');
+    expect(projects).toContain('packages/bar');
+  });
+
+  it('scanForProjects should find sub-projects created after init', () => {
+    // Init root
+    const rootCg = CodeGraph.initSync(tempDir);
+    rootCg.close();
+
+    // No sub-projects yet
+    expect(scanForProjects(tempDir)).toEqual([]);
+
+    // Create and init a sub-project
+    const sub = path.join(tempDir, 'packages/new');
+    fs.mkdirSync(sub, { recursive: true });
+    const subCg = CodeGraph.initSync(sub);
+    subCg.close();
+
+    // Scan should find it
+    const found = scanForProjects(tempDir);
+    expect(found).toContain('packages/new');
+  });
+
+  it('syncProjects preserves manually added projects during scan', () => {
+    // Init root
+    const rootCg = CodeGraph.initSync(tempDir);
+    rootCg.close();
+
+    // Add a manual entry (that won't be found by scan)
+    addProject(tempDir, 'manual/pkg');
+    // Create and init an auto-discoverable project
+    const sub = path.join(tempDir, 'packages/auto');
+    fs.mkdirSync(sub, { recursive: true });
+    const subCg = CodeGraph.initSync(sub);
+    subCg.close();
+
+    // sync
+    const merged = syncProjects(tempDir);
+    expect(merged).toContain('manual/pkg');
+    expect(merged).toContain('packages/auto');
+  });
+
+  it('should handle project add/remove lifecycle', () => {
+    const rootCg = CodeGraph.initSync(tempDir);
+    rootCg.close();
+
+    addProject(tempDir, 'packages/foo');
+    expect(loadProjects(tempDir)).toEqual(['packages/foo']);
+
+    removeProject(tempDir, 'packages/foo');
+    expect(loadProjects(tempDir)).toEqual([]);
+  });
+
+  it('should handle corrupted projects.json gracefully', () => {
+    const cgDir = path.join(tempDir, '.codegraph');
+    fs.mkdirSync(cgDir, { recursive: true });
+    fs.writeFileSync(path.join(cgDir, 'projects.json'), '{broken json', 'utf-8');
+
+    const result = loadProjects(tempDir);
+    expect(result).toEqual([]);
   });
 });
