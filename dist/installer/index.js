@@ -42,6 +42,7 @@ exports.runInstaller = runInstaller;
 const child_process_1 = require("child_process");
 const path = __importStar(require("path"));
 const fs = __importStar(require("fs"));
+const os = __importStar(require("os"));
 const config_writer_1 = require("./config-writer");
 // Dynamic import helper — tsc compiles import() to require() in CJS mode,
 // which fails for ESM-only packages. This bypasses the transformation.
@@ -85,7 +86,22 @@ async function runInstaller() {
         const s = clack.spinner();
         s.start('Installing codegraph globally...');
         try {
-            (0, child_process_1.execSync)('npm cache clean --force 2>/dev/null; npm install -g github:Quon/codegraph', { stdio: 'pipe' });
+            // Clear stale npx cache entries for this package to ensure fresh install
+            const cacacheTmp = path.join(os.homedir(), '.npm', '_cacache', 'tmp');
+            if (fs.existsSync(cacacheTmp)) {
+                for (const entry of fs.readdirSync(cacacheTmp)) {
+                    if (!entry.startsWith('git-clone'))
+                        continue;
+                    const pkgJson = path.join(cacacheTmp, entry, 'package.json');
+                    try {
+                        if (fs.existsSync(pkgJson) && JSON.parse(fs.readFileSync(pkgJson, 'utf-8')).name === '@Quon/codegraph') {
+                            fs.rmSync(path.join(cacacheTmp, entry), { recursive: true, force: true });
+                        }
+                    }
+                    catch { /* ignore invalid entries */ }
+                }
+            }
+            (0, child_process_1.execSync)('npm install -g github:Quon/codegraph', { stdio: 'pipe' });
             s.stop('Installed codegraph globally');
         }
         catch {

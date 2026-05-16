@@ -7,6 +7,7 @@
 import { execSync } from 'child_process';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import {
   writeMcpConfig, writePermissions, writeClaudeMd,
   hasMcpConfig, hasPermissions,
@@ -63,7 +64,20 @@ export async function runInstaller(): Promise<void> {
     const s = clack.spinner();
     s.start('Installing codegraph globally...');
     try {
-      execSync('npm cache clean --force 2>/dev/null; npm install -g github:Quon/codegraph', { stdio: 'pipe' });
+      // Clear stale npx cache entries for this package to ensure fresh install
+      const cacacheTmp = path.join(os.homedir(), '.npm', '_cacache', 'tmp');
+      if (fs.existsSync(cacacheTmp)) {
+        for (const entry of fs.readdirSync(cacacheTmp)) {
+          if (!entry.startsWith('git-clone')) continue;
+          const pkgJson = path.join(cacacheTmp, entry, 'package.json');
+          try {
+            if (fs.existsSync(pkgJson) && JSON.parse(fs.readFileSync(pkgJson, 'utf-8')).name === '@Quon/codegraph') {
+              fs.rmSync(path.join(cacacheTmp, entry), { recursive: true, force: true });
+            }
+          } catch { /* ignore invalid entries */ }
+        }
+      }
+      execSync('npm install -g github:Quon/codegraph', { stdio: 'pipe' });
       s.stop('Installed codegraph globally');
     } catch {
       s.stop('Could not install globally (permission denied)');
