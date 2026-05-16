@@ -407,6 +407,9 @@ export class ToolHandler {
 
     // Single named project
     const absPath = resolvePath(this.projectRoot, project);
+    if (!validatePathWithinRoot(this.projectRoot, absPath)) {
+      throw new Error(`Project path "${project}" is outside the project root`);
+    }
     const cached = this.projectCache.get(absPath);
     if (cached) return new Map([[project, cached]]);
 
@@ -501,6 +504,13 @@ export class ToolHandler {
 
     if (!resolvedRoot) {
       throw new Error(`CodeGraph not initialized in ${projectPath}. Run 'codegraph init' in that project first.`);
+    }
+
+    // If resolved root matches the default instance, reuse it instead of opening
+    // a second SQLite connection to the same database.
+    if (this.cg && this.cg.getProjectRoot() === resolvedRoot) {
+      this.projectCache.set(projectPath, this.cg);
+      return this.cg;
     }
 
     // Check if we already have this resolved root cached (different path, same project)

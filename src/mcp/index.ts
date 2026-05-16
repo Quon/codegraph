@@ -170,6 +170,7 @@ export class MCPServer {
       this.cg = CodeGraph.openSync(resolvedRoot);
       this.projectPath = resolvedRoot;
       this.toolHandler.setDefaultCodeGraph(this.cg);
+      this.toolHandler.setProjectRoot(resolvedRoot);
       this.startWatching();
     } catch {
       // Still failing — will retry on next tool call
