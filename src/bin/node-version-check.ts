@@ -6,15 +6,17 @@
  * during tree-sitter grammar compilation. This module owns the
  * user-facing banner shown before exit. Kept side-effect-free so it's
  * safe to import from tests without triggering CLI bootstrap.
+ *
+ * Node 26+ ships with a fixed V8 and should not hit this bug. If a
+ * new V8 issue is confirmed in a future major, add it here.
  */
 
 /**
- * Build the bordered banner shown when CodeGraph detects an
- * unsupported Node.js major version (currently 25+). Pinned via unit
- * test so the recovery commands and override instructions can't be
- * silently stripped by future edits.
+ * Build the bordered banner shown when CodeGraph detects a blocked
+ * Node.js major version. Pinned via unit test so the recovery commands
+ * and override instructions can't be silently stripped by future edits.
  */
-export function buildNode25BlockBanner(nodeVersion: string): string {
+export function buildNodeBlockBanner(nodeVersion: string): string {
   const sep = '─'.repeat(72);
   return [
     sep,
