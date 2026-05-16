@@ -60,6 +60,16 @@ export {
   findNearestCodeGraphRoot,
   CODEGRAPH_DIR,
 } from './directory';
+export {
+  PROJECTS_FILENAME,
+  getProjectsPath,
+  loadProjects,
+  saveProjects,
+  addProject,
+  removeProject,
+  scanForProjects,
+  syncProjects,
+} from './projects';
 export { IndexProgress, IndexResult, SyncResult } from './extraction';
 export { detectLanguage, isLanguageSupported, isGrammarLoaded, getSupportedLanguages, initGrammars, loadGrammarsForLanguages, loadAllGrammars } from './extraction';
 export { ResolutionResult } from './resolution';
