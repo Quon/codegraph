@@ -16,7 +16,7 @@
  */
 
 import * as path from 'path';
-import CodeGraph, { findNearestCodeGraphRoot } from '../index';
+import CodeGraph, { findNearestCodeGraphRoot, isInitialized, loadProjects } from '../index';
 import { StdioTransport, JsonRpcRequest, JsonRpcNotification, ErrorCodes } from './transport';
 import { tools, ToolHandler } from './tools';
 import { SERVER_INSTRUCTIONS } from './server-instructions';
@@ -117,6 +117,27 @@ export class MCPServer {
     try {
       this.cg = await CodeGraph.open(resolvedRoot);
       this.toolHandler.setDefaultCodeGraph(this.cg);
+      this.toolHandler.setProjectRoot(resolvedRoot);
+
+      // Eagerly open sub-projects (<=20)
+      const projects = loadProjects(resolvedRoot);
+      if (projects.length > 0 && projects.length <= 20) {
+        for (const name of projects) {
+          const absPath = path.resolve(resolvedRoot, name);
+          if (isInitialized(absPath)) {
+            try {
+              const subCg = CodeGraph.openSync(absPath);
+              this.toolHandler.addToCache(absPath, subCg);
+              this.toolHandler.startWatcherFor(name, absPath, subCg);
+            } catch (err) {
+              process.stderr.write(
+                `[CodeGraph MCP] Failed to open sub-project "${name}": ${err}\n`
+              );
+            }
+          }
+        }
+      }
+
       this.startWatching();
     } catch (err) {
       // Log the error so transient failures are diagnosable (see issue #47)
