@@ -22,6 +22,12 @@ import { Command } from 'commander';
 import * as path from 'path';
 import * as fs from 'fs';
 import { getCodeGraphDir, isInitialized } from '../directory';
+import {
+  loadProjects,
+  addProject,
+  removeProject,
+  syncProjects,
+} from '../projects';
 import { createShimmerProgress } from '../ui/shimmer-progress';
 
 import { buildNode25BlockBanner } from './node-version-check';
@@ -1279,6 +1285,97 @@ program
   .action(async () => {
     const { runInstaller } = await import('../installer');
     await runInstaller();
+  });
+
+// =============================================================================
+// Project Management Commands
+// =============================================================================
+
+const projectCmd = program.command('project').description('Manage registered sub-projects');
+
+projectCmd
+  .command('list')
+  .description('List registered sub-projects with initialization status')
+  .action(async () => {
+    const projectRoot = resolveProjectPath(process.cwd());
+    if (!isInitialized(projectRoot)) {
+      error('CodeGraph not initialized in this project. Run \'codegraph init\' first.');
+      process.exit(1);
+    }
+
+    const projects = loadProjects(projectRoot);
+
+    console.log(chalk.bold(`\nRegistered projects (root: ${projectRoot}):\n`));
+
+    if (projects.length === 0) {
+      console.log('  (none)');
+      console.log('');
+      return;
+    }
+
+    let available = 0;
+    for (const relPath of projects) {
+      const absPath = path.resolve(projectRoot, relPath);
+      if (isInitialized(absPath)) {
+        available++;
+        // Get basic stats from the sub-project
+        try {
+          const { default: CodeGraph } = await loadCodeGraph();
+          const subCg = CodeGraph.openSync(absPath);
+          const stats = subCg.getStats();
+          subCg.close();
+          console.log(`  ${relPath.padEnd(30)} ${chalk.green('✓')}  (${formatNumber(stats.nodeCount)} symbols, ${formatNumber(stats.fileCount)} files)`);
+        } catch {
+          console.log(`  ${relPath.padEnd(30)} ${chalk.green('✓')}  (unable to read stats)`);
+        }
+      } else {
+        console.log(`  ${relPath.padEnd(30)} ${chalk.red('✗')}  (not initialized)`);
+      }
+    }
+
+    console.log(`\n  ${available} of ${projects.length} projects available\n`);
+  });
+
+projectCmd
+  .command('add <path>')
+  .description('Register a sub-project path (relative to project root)')
+  .action((pathArg: string) => {
+    const projectRoot = resolveProjectPath(process.cwd());
+    addProject(projectRoot, pathArg);
+    success(`Registered project: ${pathArg}`);
+  });
+
+projectCmd
+  .command('remove <path>')
+  .description('Unregister a sub-project')
+  .action((pathArg: string) => {
+    const projectRoot = resolveProjectPath(process.cwd());
+    removeProject(projectRoot, pathArg);
+    success(`Removed project: ${pathArg}`);
+  });
+
+projectCmd
+  .command('scan')
+  .description('Auto-discover initialized sub-projects and merge into registry')
+  .option('-d, --depth <number>', 'Maximum directory depth to scan', '3')
+  .action(async (options: { depth?: string }) => {
+    const depth = parseInt(options.depth || '3', 10);
+    const projectRoot = resolveProjectPath(process.cwd());
+
+    info(`Scanning for initialized projects (max depth: ${depth})...`);
+    const merged = syncProjects(projectRoot);
+
+    if (merged.length === 0) {
+      console.log('  No initialized sub-projects found.');
+    } else {
+      for (const p of merged) {
+        const absPath = path.resolve(projectRoot, p);
+        const status = isInitialized(absPath)
+          ? chalk.green('✓')
+          : chalk.yellow('(registered but not initialized)');
+        console.log(`  ${p.padEnd(35)} ${status}`);
+      }
+    }
   });
 
 // Parse and run
