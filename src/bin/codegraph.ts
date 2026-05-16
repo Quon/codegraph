@@ -1363,7 +1363,7 @@ projectCmd
     const projectRoot = resolveProjectPath(process.cwd());
 
     info(`Scanning for initialized projects (max depth: ${depth})...`);
-    const merged = syncProjects(projectRoot);
+    const merged = syncProjects(projectRoot, depth);
 
     if (merged.length === 0) {
       console.log('  No initialized sub-projects found.');

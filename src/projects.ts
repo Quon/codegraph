@@ -143,9 +143,9 @@ export function scanForProjects(root: string, maxDepth: number = 3): string[] {
  * Merges scan results with existing entries (keeps manually added projects).
  * Returns the merged and saved project list.
  */
-export function syncProjects(root: string): string[] {
+export function syncProjects(root: string, maxDepth?: number): string[] {
   const existing = loadProjects(root);
-  const discovered = scanForProjects(root);
+  const discovered = scanForProjects(root, maxDepth);
   const merged = [...new Set([...existing, ...discovered])].sort();
   saveProjects(root, merged);
   return merged;
