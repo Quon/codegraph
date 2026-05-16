@@ -149,8 +149,6 @@ This prevents slow startup on large monorepos while keeping small ones snappy.
 Each `openSync()` call is ~5-10ms on an indexed project, so 20 projects = ~100-200ms,
 well within acceptable startup time.
 
-File watching stays on the root project only (sub-projects don't get individual watchers).
-
 #### New MCP Tool: `codegraph_projects`
 
 ```
@@ -204,6 +202,58 @@ private resolveProjects(
 Returns a map to support `project: "*"` (multi-result). When there's a single result,
 the map has one entry. The execute methods iterate this map and aggregate results.
 
+### File Change Tracking (Watchers)
+
+Each opened sub‑project gets its **own `FileWatcher`** for automatic sync.
+
+#### Watcher Management
+
+`ToolHandler` tracks sub‑project watchers alongside the project cache:
+
+```typescript
+class ToolHandler {
+  private projectCache: Map<string, CodeGraph> = new Map();
+  private watchers: Map<string, FileWatcher> = new Map();  // NEW
+}
+```
+
+When a sub‑project is opened (eagerly at startup or lazily on first use):
+
+1. Open the sub‑project with `CodeGraph.openSync(path)`
+2. Call `cg.watch()` with the same sync callbacks as the root project
+3. Store the `FileWatcher` instance in the `watchers` map, keyed by the same path
+
+When closing:
+- `closeAll()` stops all sub‑project watchers before closing their `CodeGraph`
+- `stop()` on MCP server shutdown does the same
+
+#### Why Per‑Project Watchers
+
+`fs.watch` reports file change paths **relative to the watch root**. If we watched
+the monorepo root and tried to route changes to sub‑projects, we'd need to:
+- Determine which sub‑project owns each changed file
+- Pass per‑sub‑project config filters to a single watcher
+
+A per‑project watcher is simpler. Each `FileWatcher`:
+- Watches its own `projectRoot` (the sub‑package directory)
+- Filters through its own `config.include`/`config.exclude` patterns
+- Calls `sync()` on its own `CodeGraph` instance
+
+The OS overhead of multiple `fs.watch` calls on the same filesystem subtree
+is negligible on all three platforms (inotify, FSEvents, ReadDirectoryChangesW).
+
+#### Edge Cases
+
+| Scenario | Behavior |
+|----------|----------|
+| File changed in non‑registered directory | Root watcher fires, syncs root database only |
+| File changed in registered sub‑project | Sub‑project watcher fires, syncs sub‑project database; root watcher also fires (sees overall directory), no conflict |
+| Sub‑project added via CLI at runtime | Watcher started immediately, no restart needed |
+| Sub‑project removed via CLI at runtime | Watcher stopped, `CodeGraph` instance closed, cache entry removed |
+| > 20 projects (lazy‑load mode) | Sub‑project watcher started when the project is first opened on demand |
+
+### Cross-Project Query with `project: "*"`
+
 ### Cross-Project Query with `project: "*"`
 
 When `project: "*"` is used:
@@ -252,8 +302,9 @@ an array of `{ project: "...", result: { ... } }` — one entry per matching pro
 | `src/directory.ts` | Re-export or reference `CODEGRAPH_DIR` constant |
 | `src/index.ts` | Export new functions from `projects.ts` |
 | `src/bin/codegraph.ts` | Add `project` sub-command group |
-| `src/mcp/index.ts` | Startup: load and open sub-projects |
-| `src/mcp/tools.ts` | Add `codegraph_projects` tool; enhance existing tools with `project` param |
+| `src/mcp/index.ts` | Startup: load and open sub-projects; start/stop sub-project watchers |
+| `src/mcp/tools.ts` | Add `codegraph_projects` tool; enhance existing tools with `project` param; track per-project FileWatchers |
+| `src/sync/watcher.ts` | No changes needed (FileWatcher already accepts projectRoot + config) |
 | `docs/superpowers/specs/2026-05-16-monorepo-support-design.md` | This document |
 
 ### Non-Goals
@@ -277,3 +328,4 @@ an array of `{ project: "...", result: { ... } }` — one entry per matching pro
 | MCP startup | Mock filesystem to verify projects.json is loaded and sub-projects are cached |
 | `project: "*"` query | Mock multiple CodeGraph instances, verify aggregation + source tagging |
 | Error handling | Empty projects.json, corrupted JSON, deleted sub-project, lock contention |
+| Watcher lifecycle | Verify sub-project watchers start on open and stop on close/remove |
