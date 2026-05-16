@@ -51,8 +51,8 @@ export function saveProjects(projectRoot: string, projects: string[]): void {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  // Deduplicate (preserves insertion order in modern JS)
-  const unique = [...new Set(projects)];
+  // Deduplicate and sort for consistent file output
+  const unique = [...new Set(projects)].sort();
   const content = JSON.stringify(unique, null, 2);
   const tmpPath = filePath + '.tmp';
   fs.writeFileSync(tmpPath, content, 'utf-8');

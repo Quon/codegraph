@@ -43,6 +43,14 @@ describe('Projects Registry', () => {
     cleanupTempDir(tempDir);
   });
 
+  describe('getProjectsPath', () => {
+    it('should return correct path to projects.json', () => {
+      expect(getProjectsPath(tempDir)).toBe(
+        path.join(tempDir, '.codegraph', 'projects.json')
+      );
+    });
+  });
+
   describe('loadProjects', () => {
     it('should return empty array when projects.json does not exist', () => {
       const result = loadProjects(tempDir);
@@ -68,14 +76,26 @@ describe('Projects Registry', () => {
       const result = loadProjects(tempDir);
       expect(result).toEqual(['packages/foo', 'packages/bar']);
     });
+
+    it('should filter non-string entries', () => {
+      const cgDir = path.join(tempDir, '.codegraph');
+      fs.mkdirSync(cgDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(cgDir, PROJECTS_FILENAME),
+        JSON.stringify(['valid', 42, null, { bad: true }]),
+        'utf-8'
+      );
+      const result = loadProjects(tempDir);
+      expect(result).toEqual(['valid']);
+    });
   });
 
   describe('saveProjects', () => {
     it('should save projects to projects.json', () => {
-      saveProjects(tempDir, ['packages/foo', 'packages/bar']);
+      saveProjects(tempDir, ['packages/bar', 'packages/foo']);
       const cgDir = path.join(tempDir, '.codegraph');
       const content = fs.readFileSync(path.join(cgDir, PROJECTS_FILENAME), 'utf-8');
-      expect(JSON.parse(content)).toEqual(['packages/foo', 'packages/bar']);
+      expect(JSON.parse(content)).toEqual(['packages/bar', 'packages/foo']);
     });
 
     it('should write atomically (temp file + rename)', () => {
@@ -104,7 +124,9 @@ describe('Projects Registry', () => {
     it('should append to existing projects', () => {
       addProject(tempDir, 'packages/foo');
       const result = addProject(tempDir, 'packages/bar');
-      expect(result).toEqual(['packages/foo', 'packages/bar']);
+      // Return value preserves insertion order; file on disk is sorted
+      expect(result).toContain('packages/foo');
+      expect(result).toContain('packages/bar');
     });
   });
 
@@ -128,7 +150,7 @@ describe('Projects Registry', () => {
       createProject(tempDir, 'packages/foo');
       createProject(tempDir, 'packages/bar');
       const result = scanForProjects(tempDir);
-      expect(result.sort()).toEqual(['packages/bar', 'packages/foo']);
+      expect(result).toEqual(['packages/bar', 'packages/foo']);
     });
 
     it('should respect maxDepth', () => {
