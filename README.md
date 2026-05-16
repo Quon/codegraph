@@ -19,7 +19,7 @@
 ### Get Started
 
 ```bash
-npx @Quon/codegraph
+npx github:Quon/codegraph
 ```
 
 <sub>Interactive installer configures Claude Code automatically</sub>
@@ -145,7 +145,7 @@ CodeGraph detects web-framework routing files and emits `route` nodes linked by 
 ### 1. Run the Installer
 
 ```bash
-npx @colbymchenry/codegraph
+npx github:Quon/codegraph
 ```
 
 The installer will:
@@ -173,7 +173,7 @@ That's it! Claude Code will use CodeGraph tools automatically when a `.codegraph
 
 **Install globally:**
 ```bash
-npm install -g @colbymchenry/codegraph
+npm install -g github:Quon/codegraph
 ```
 
 **Add to `~/.claude.json`:**
