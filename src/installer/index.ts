@@ -63,7 +63,7 @@ export async function runInstaller(): Promise<void> {
     const s = clack.spinner();
     s.start('Installing codegraph globally...');
     try {
-      execSync('npm install -g github:Quon/codegraph', { stdio: 'pipe' });
+      execSync('npm cache clean --force 2>/dev/null; npm install -g github:Quon/codegraph', { stdio: 'pipe' });
       s.stop('Installed codegraph globally');
     } catch {
       s.stop('Could not install globally (permission denied)');

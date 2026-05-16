@@ -85,7 +85,7 @@ async function runInstaller() {
         const s = clack.spinner();
         s.start('Installing codegraph globally...');
         try {
-            (0, child_process_1.execSync)('npm install -g github:Quon/codegraph', { stdio: 'pipe' });
+            (0, child_process_1.execSync)('npm cache clean --force 2>/dev/null; npm install -g github:Quon/codegraph', { stdio: 'pipe' });
             s.stop('Installed codegraph globally');
         }
         catch {
