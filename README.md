@@ -19,7 +19,7 @@
 ### Get Started
 
 ```bash
-npx @colbymchenry/codegraph
+npx @Quon/codegraph
 ```
 
 <sub>Interactive installer configures Claude Code automatically</sub>
