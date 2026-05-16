@@ -63,11 +63,11 @@ export async function runInstaller(): Promise<void> {
     const s = clack.spinner();
     s.start('Installing codegraph globally...');
     try {
-      execSync('npm install -g @Quon/codegraph', { stdio: 'pipe' });
+      execSync('npm install -g github:Quon/codegraph', { stdio: 'pipe' });
       s.stop('Installed codegraph globally');
     } catch {
       s.stop('Could not install globally (permission denied)');
-      clack.log.warn('Try: sudo npm install -g @Quon/codegraph');
+      clack.log.warn('Try: sudo npm install -g github:Quon/codegraph');
     }
   } else {
     clack.log.info('Skipped global install — MCP server uses npx, so it will still work');
