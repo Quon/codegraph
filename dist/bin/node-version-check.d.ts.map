@@ -1,1 +1,1 @@
-{"version":3,"file":"node-version-check.d.ts","sourceRoot":"","sources":["../../src/bin/node-version-check.ts"],"names":[],"mappings":"AAAA;;;;;;;;GAQG;AAEH;;;;;GAKG;AACH,wBAAgB,sBAAsB,CAAC,WAAW,EAAE,MAAM,GAAG,MAAM,CAmBlE"}
+{"version":3,"file":"node-version-check.d.ts","sourceRoot":"","sources":["../../src/bin/node-version-check.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;GAWG;AAEH;;;;GAIG;AACH,wBAAgB,oBAAoB,CAAC,WAAW,EAAE,MAAM,GAAG,MAAM,CAmBhE"}
