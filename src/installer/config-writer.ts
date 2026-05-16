@@ -99,12 +99,24 @@ function writeJsonFile(filePath: string, data: Record<string, any>): void {
 
 /**
  * Get the MCP server configuration
+ *
+ * Uses npx to invoke codegraph so it works regardless of whether the user
+ * has installed the package globally. npx resolves from local node_modules,
+ * global installs, and the GitHub package cache, in that order.
  */
 function getMcpServerConfig(): Record<string, any> {
+  const isWin = process.platform === 'win32';
   return {
     type: 'stdio',
-    command: 'codegraph',
-    args: ['serve', '--mcp'],
+    ...(isWin
+      ? {
+          command: 'cmd',
+          args: ['/c', 'npx', '-y', 'github:Quon/codegraph', 'serve', '--mcp'],
+        }
+      : {
+          command: 'npx',
+          args: ['-y', 'github:Quon/codegraph', 'serve', '--mcp'],
+        }),
   };
 }
 

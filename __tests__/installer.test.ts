@@ -88,6 +88,29 @@ describe('Installer Config Writer', () => {
       warnSpy.mockRestore();
     });
 
+    it('should use npx-based command for MCP server (no global install required)', () => {
+      writeMcpConfig('local');
+
+      const claudeJson = path.join(tempDir, '.claude.json');
+      const content = JSON.parse(fs.readFileSync(claudeJson, 'utf-8'));
+      const server = content.mcpServers.codegraph;
+
+      expect(server.type).toBe('stdio');
+      // Should use npx, not bare 'codegraph' command
+      if (process.platform === 'win32') {
+        expect(server.command).toBe('cmd');
+        expect(server.args[0]).toBe('/c');
+        expect(server.args[1]).toBe('npx');
+      } else {
+        expect(server.command).toBe('npx');
+      }
+      // Should reference the GitHub package
+      const args = server.args as string[];
+      expect(args.some((a: string) => a.includes('github:Quon/codegraph'))).toBe(true);
+      expect(args.some((a: string) => a === 'serve')).toBe(true);
+      expect(args.some((a: string) => a === '--mcp')).toBe(true);
+    });
+
     it('should preserve existing valid config when adding codegraph', () => {
       const claudeJson = path.join(tempDir, '.claude.json');
       fs.writeFileSync(claudeJson, JSON.stringify({
