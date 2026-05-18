@@ -16058,7 +16058,7 @@ var init_extraction = __esm({
     init_grammars();
     FILE_IO_BATCH_SIZE = 10;
     PARSE_TIMEOUT_MS = 1e4;
-    WORKER_RECYCLE_INTERVAL = 50;
+    WORKER_RECYCLE_INTERVAL = 250;
     CODEGRAPH_IGNORE_MARKER = ".codegraphignore";
     ExtractionOrchestrator = class {
       rootDir;

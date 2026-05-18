@@ -47,7 +47,7 @@ const PARSE_TIMEOUT_MS = 10_000;
  * V8 isolate by terminating the worker thread and spawning a fresh one.
  * This interval balances memory usage against the cost of reloading grammars.
  */
-const WORKER_RECYCLE_INTERVAL = 50;
+const WORKER_RECYCLE_INTERVAL = 250;
 
 /**
  * Progress callback for indexing operations
