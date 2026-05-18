@@ -595,13 +595,17 @@ export class ExtractionOrchestrator {
     }
 
     function attachWorkerHandlers(w: import('worker_threads').Worker): void {
-      w.on('message', (msg: { type: string; id?: number; result?: ExtractionResult }) => {
+      w.on('message', (msg: { type: string; id?: number; result?: ExtractionResult; shouldRecycle?: boolean }) => {
         if (msg.type === 'parse-result' && msg.id !== undefined) {
           const pending = pendingParses.get(msg.id);
           if (pending) {
             clearTimeout(pending.timer);
             pendingParses.delete(msg.id);
             pending.resolve(msg.result!);
+          }
+          // Worker reported high RSS — trigger recycle after current batch
+          if (msg.shouldRecycle && w === parseWorker) {
+            workerParseCount = WORKER_RECYCLE_INTERVAL;
           }
         }
       });

@@ -55,6 +55,11 @@ import type { Language, ExtractionResult } from '../types';
 const PARSER_RESET_INTERVAL = 5000;
 const parseCounts = new Map<Language, number>();
 
+// Recycle threshold: signal the main thread to replace this worker when RSS
+// exceeds this value. Zone memory (used by V8 JIT tier-up of WASM functions)
+// is reflected in RSS and cannot be freed without destroying the V8 isolate.
+const RECYCLE_RSS_THRESHOLD_MB = 400;
+
 parentPort!.on('message', async (msg: { type: string; id?: number; filePath?: string; content?: string; frameworkNames?: string[] }) => {
   if (msg.type === 'parse') {
     const { id, filePath, content, frameworkNames } = msg;
@@ -74,7 +79,13 @@ parentPort!.on('message', async (msg: { type: string; id?: number; filePath?: st
         resetParser(language);
       }
 
-      parentPort!.postMessage({ type: 'parse-result', id, result });
+      // Signal the main thread to recycle this worker when RSS is high.
+      // Zone memory from V8 JIT tier-up of WASM only frees when the isolate
+      // is destroyed — the main thread will replace us after this batch.
+      const rssMb = process.memoryUsage().rss / 1024 / 1024;
+      const shouldRecycle = rssMb > RECYCLE_RSS_THRESHOLD_MB;
+
+      parentPort!.postMessage({ type: 'parse-result', id, result, shouldRecycle });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
 

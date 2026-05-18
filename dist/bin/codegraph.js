@@ -16209,6 +16209,9 @@ var init_extraction = __esm({
                 pendingParses.delete(msg.id);
                 pending.resolve(msg.result);
               }
+              if (msg.shouldRecycle && w === parseWorker) {
+                workerParseCount = WORKER_RECYCLE_INTERVAL;
+              }
             }
           });
           w.on("error", (err) => {

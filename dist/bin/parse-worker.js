@@ -9093,6 +9093,7 @@ function extractFromSource(filePath, source, language, frameworkNames) {
 }
 var PARSER_RESET_INTERVAL = 5e3;
 var parseCounts = /* @__PURE__ */ new Map();
+var RECYCLE_RSS_THRESHOLD_MB = 400;
 import_worker_threads.parentPort.on("message", async (msg) => {
   if (msg.type === "parse") {
     const { id, filePath, content, frameworkNames } = msg;
@@ -9105,7 +9106,9 @@ import_worker_threads.parentPort.on("message", async (msg) => {
       if (count % PARSER_RESET_INTERVAL === 0) {
         resetParser(language);
       }
-      import_worker_threads.parentPort.postMessage({ type: "parse-result", id, result });
+      const rssMb = process.memoryUsage().rss / 1024 / 1024;
+      const shouldRecycle = rssMb > RECYCLE_RSS_THRESHOLD_MB;
+      import_worker_threads.parentPort.postMessage({ type: "parse-result", id, result, shouldRecycle });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (message.includes("memory access out of bounds") || message.includes("out of memory")) {
