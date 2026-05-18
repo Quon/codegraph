@@ -309,7 +309,35 @@ codegraph files [path]            # Show file structure (--format, --filter, --m
 codegraph context <task>          # Build context for AI (--format, --max-nodes)
 codegraph affected [files...]     # Find test files affected by changes (see below)
 codegraph serve --mcp             # Start MCP server
+
+# Monorepo sub-projects
+codegraph project list            # List registered sub-projects
+codegraph project add <path>      # Register a sub-project (relative path from root)
+codegraph project remove <path>   # Unregister a sub-project
+codegraph project scan            # Auto-discover initialized sub-projects (--depth, default 3)
 ```
+
+### Monorepo / multi-project
+
+Initialize each sub-project independently, then register them from the monorepo root so the MCP tools can address them by name.
+
+```bash
+# In each sub-project
+cd packages/foo && codegraph init -i && codegraph index
+
+# Back at the root — auto-discover all initialized sub-projects
+cd ../..
+codegraph project scan            # writes .codegraph/projects.json
+
+# Or register manually
+codegraph project add packages/foo
+codegraph project add packages/bar
+
+# Verify
+codegraph project list
+```
+
+MCP tools accept a `project` parameter (`"packages/foo"`) to target a specific sub-project.
 
 ### `codegraph affected`
 
