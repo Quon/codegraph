@@ -16229,9 +16229,7 @@ var init_extraction = __esm({
         async function ensureWorker() {
           if (parseWorker) return parseWorker;
           log("Spawning new parse worker...");
-          parseWorker = new WorkerClass(parseWorkerPath, {
-            execArgv: ["--max-old-space-size=4096"]
-          });
+          parseWorker = new WorkerClass(parseWorkerPath);
           attachWorkerHandlers(parseWorker);
           return parseWorker;
         }
