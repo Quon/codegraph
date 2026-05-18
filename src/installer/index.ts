@@ -51,7 +51,7 @@ export async function runInstaller(): Promise<void> {
 
   // Step 1: Install globally
   const shouldInstallGlobally = await clack.confirm({
-    message: 'Install codegraph globally? (MCP server now uses npx, so this is optional)',
+    message: 'Install codegraph globally? (required for MCP server)',
     initialValue: true,
   });
 
@@ -84,7 +84,7 @@ export async function runInstaller(): Promise<void> {
       clack.log.warn('Try: sudo npm install -g https://github.com/Quon/codegraph/archive/refs/heads/main.tar.gz');
     }
   } else {
-    clack.log.info('Skipped global install — MCP server uses npx, so it will still work');
+    clack.log.warn('Skipped global install — run `npm install -g` manually before starting the MCP server');
   }
 
   // Step 2: Installation location
