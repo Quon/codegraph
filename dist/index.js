@@ -4528,10 +4528,17 @@ var parserCache = /* @__PURE__ */ new Map();
 var languageCache = /* @__PURE__ */ new Map();
 var unavailableGrammarErrors = /* @__PURE__ */ new Map();
 var parserInitialized = false;
+var initPromise = null;
+var loadQueue = Promise.resolve();
+var loadingPromises = /* @__PURE__ */ new Map();
 async function initGrammars() {
   if (parserInitialized) return;
-  await import_web_tree_sitter.Parser.init();
-  parserInitialized = true;
+  if (!initPromise) {
+    initPromise = import_web_tree_sitter.Parser.init().then(() => {
+      parserInitialized = true;
+    });
+  }
+  await initPromise;
 }
 async function loadGrammarsForLanguages(languages) {
   if (!parserInitialized) {
@@ -4540,18 +4547,34 @@ async function loadGrammarsForLanguages(languages) {
   const toLoad = [...new Set(languages)].filter(
     (lang) => lang in WASM_GRAMMAR_FILES && !languageCache.has(lang) && !unavailableGrammarErrors.has(lang)
   );
-  for (const lang of toLoad) {
-    const wasmFile = WASM_GRAMMAR_FILES[lang];
-    try {
-      const wasmPath = lang === "pascal" || lang === "scala" ? path6.join(__dirname, "wasm", wasmFile) : require.resolve(`tree-sitter-wasms/out/${wasmFile}`);
-      const language = await import_web_tree_sitter.Language.load(wasmPath);
-      languageCache.set(lang, language);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.warn(`[CodeGraph] Failed to load ${lang} grammar \u2014 parsing will be unavailable: ${message}`);
-      unavailableGrammarErrors.set(lang, message);
+  if (toLoad.length === 0) return;
+  const promises = toLoad.map((lang) => {
+    if (loadingPromises.has(lang)) {
+      return loadingPromises.get(lang);
     }
-  }
+    const p = loadQueue.then(async () => {
+      if (languageCache.has(lang) || unavailableGrammarErrors.has(lang)) return;
+      const wasmFile = WASM_GRAMMAR_FILES[lang];
+      try {
+        const wasmPath = lang === "pascal" || lang === "scala" ? path6.join(__dirname, "wasm", wasmFile) : require.resolve(`tree-sitter-wasms/out/${wasmFile}`);
+        const language = await import_web_tree_sitter.Language.load(wasmPath);
+        languageCache.set(lang, language);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[CodeGraph] Failed to load ${lang} grammar \u2014 parsing will be unavailable: ${message}`
+        );
+        unavailableGrammarErrors.set(lang, message);
+      }
+    }).finally(() => {
+      loadingPromises.delete(lang);
+    });
+    loadQueue = p.catch(() => {
+    });
+    loadingPromises.set(lang, p);
+    return p;
+  });
+  await Promise.all(promises);
 }
 async function loadAllGrammars() {
   const allLanguages = Object.keys(WASM_GRAMMAR_FILES);

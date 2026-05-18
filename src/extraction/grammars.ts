@@ -89,6 +89,18 @@ const unavailableGrammarErrors = new Map<Language, string>();
 
 let parserInitialized = false;
 
+// Deduplicate concurrent initGrammars() calls
+let initPromise: Promise<void> | null = null;
+
+// Global WASM load queue — web-tree-sitter is not safe for concurrent
+// WasmLanguage.load() calls on Node 20+ (https://github.com/tree-sitter/tree-sitter/issues/2338).
+// All grammar loads are chained onto this promise so they execute one at a time.
+let loadQueue: Promise<void> = Promise.resolve();
+
+// Per-language in-progress promise — concurrent callers for the same language
+// join the existing promise instead of starting a duplicate load.
+const loadingPromises = new Map<GrammarLanguage, Promise<void>>();
+
 /**
  * Initialize the tree-sitter WASM runtime. Must be called before loading grammars.
  * Does NOT load any grammar WASM files — use loadGrammarsForLanguages() for that.
@@ -96,10 +108,10 @@ let parserInitialized = false;
  */
 export async function initGrammars(): Promise<void> {
   if (parserInitialized) return;
-
-  await Parser.init();
-
-  parserInitialized = true;
+  if (!initPromise) {
+    initPromise = Parser.init().then(() => { parserInitialized = true; });
+  }
+  await initPromise;
 }
 
 /**
@@ -112,7 +124,6 @@ export async function loadGrammarsForLanguages(languages: Language[]): Promise<v
     await initGrammars();
   }
 
-  // Deduplicate and filter to languages that have WASM grammars and aren't already loaded
   const toLoad = [...new Set(languages)].filter(
     (lang): lang is GrammarLanguage =>
       lang in WASM_GRAMMAR_FILES &&
@@ -120,23 +131,50 @@ export async function loadGrammarsForLanguages(languages: Language[]): Promise<v
       !unavailableGrammarErrors.has(lang)
   );
 
-  // Load grammars sequentially to avoid web-tree-sitter WASM race condition on Node 20+
-  // See: https://github.com/tree-sitter/tree-sitter/issues/2338
-  for (const lang of toLoad) {
-    const wasmFile = WASM_GRAMMAR_FILES[lang];
-    try {
-      // Pascal and Scala ship their own WASMs (not in tree-sitter-wasms)
-      const wasmPath = (lang === 'pascal' || lang === 'scala')
-        ? path.join(__dirname, 'wasm', wasmFile)
-        : require.resolve(`tree-sitter-wasms/out/${wasmFile}`);
-      const language = await WasmLanguage.load(wasmPath);
-      languageCache.set(lang, language);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.warn(`[CodeGraph] Failed to load ${lang} grammar — parsing will be unavailable: ${message}`);
-      unavailableGrammarErrors.set(lang, message);
+  if (toLoad.length === 0) return;
+
+  // For each language, join an existing in-progress load or schedule a new one.
+  // All loads are chained onto loadQueue so they execute strictly one at a time
+  // (web-tree-sitter WASM race condition on Node 20+).
+  //
+  // Note: loadingPromises is populated synchronously before any await, so a
+  // second concurrent caller that checks the map after the first caller's
+  // synchronous setup will always find the entry and reuse it.
+  const promises = toLoad.map((lang) => {
+    if (loadingPromises.has(lang)) {
+      return loadingPromises.get(lang)!;
     }
-  }
+
+    const p = loadQueue.then(async () => {
+      // Re-check after waiting in queue: an earlier entry may have loaded this
+      if (languageCache.has(lang) || unavailableGrammarErrors.has(lang)) return;
+
+      const wasmFile = WASM_GRAMMAR_FILES[lang];
+      try {
+        const wasmPath =
+          lang === 'pascal' || lang === 'scala'
+            ? path.join(__dirname, 'wasm', wasmFile)
+            : require.resolve(`tree-sitter-wasms/out/${wasmFile}`);
+        const language = await WasmLanguage.load(wasmPath);
+        languageCache.set(lang, language);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(
+          `[CodeGraph] Failed to load ${lang} grammar — parsing will be unavailable: ${message}`
+        );
+        unavailableGrammarErrors.set(lang, message);
+      }
+    }).finally(() => {
+      loadingPromises.delete(lang);
+    });
+
+    // Advance the global queue (swallow errors so one bad load doesn't block the chain)
+    loadQueue = p.catch(() => {});
+    loadingPromises.set(lang, p);
+    return p;
+  });
+
+  await Promise.all(promises);
 }
 
 /**

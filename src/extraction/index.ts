@@ -550,7 +550,8 @@ export class ExtractionOrchestrator {
     });
     await new Promise(resolve => setImmediate(resolve));
 
-    // Detect needed languages and load grammars in the parse worker
+    // Detect needed languages — only used for the in-process fallback path.
+    // The parse worker loads grammars lazily per file, so this is skipped there.
     const neededLanguages = [...new Set(files.map((f) => detectLanguage(f)))];
     // .h files default to 'c' but may be C++ — ensure cpp grammar is loaded when c is needed
     if (neededLanguages.includes('c') && !neededLanguages.includes('cpp')) {
