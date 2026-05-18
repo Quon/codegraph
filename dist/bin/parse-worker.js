@@ -9071,13 +9071,11 @@ function extractFromSource(filePath, source, language, frameworkNames) {
 var PARSER_RESET_INTERVAL = 5e3;
 var parseCounts = /* @__PURE__ */ new Map();
 import_worker_threads.parentPort.on("message", async (msg) => {
-  if (msg.type === "load-grammars") {
-    await loadGrammarsForLanguages(msg.languages);
-    import_worker_threads.parentPort.postMessage({ type: "grammars-loaded" });
-  } else if (msg.type === "parse") {
+  if (msg.type === "parse") {
     const { id, filePath, content, frameworkNames } = msg;
     try {
       const language = detectLanguage(filePath, content);
+      await loadGrammarsForLanguages([language]);
       const result = extractFromSource(filePath, content, language, frameworkNames);
       const count = (parseCounts.get(language) ?? 0) + 1;
       parseCounts.set(language, count);

@@ -16210,13 +16210,6 @@ var init_extraction = __esm({
             execArgv: ["--max-old-space-size=4096"]
           });
           attachWorkerHandlers(parseWorker);
-          await new Promise((resolve10, reject) => {
-            parseWorker.once("message", (msg) => {
-              if (msg.type === "grammars-loaded") resolve10();
-              else reject(new Error(`Unexpected message: ${msg.type}`));
-            });
-            parseWorker.postMessage({ type: "load-grammars", languages: neededLanguages });
-          });
           return parseWorker;
         }
         if (WorkerClass) {

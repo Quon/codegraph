@@ -12252,13 +12252,6 @@ var ExtractionOrchestrator = class {
         execArgv: ["--max-old-space-size=4096"]
       });
       attachWorkerHandlers(parseWorker);
-      await new Promise((resolve9, reject) => {
-        parseWorker.once("message", (msg) => {
-          if (msg.type === "grammars-loaded") resolve9();
-          else reject(new Error(`Unexpected message: ${msg.type}`));
-        });
-        parseWorker.postMessage({ type: "load-grammars", languages: neededLanguages });
-      });
       return parseWorker;
     }
     if (WorkerClass) {
