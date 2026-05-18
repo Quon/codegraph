@@ -3584,17 +3584,34 @@ var init_directory = __esm({
 });
 
 // src/projects.ts
+function nameFromPath(relPath) {
+  const segments = relPath.replace(/\\/g, "/").split("/").filter(Boolean);
+  return segments[segments.length - 1] ?? relPath;
+}
+function parseEntry(raw) {
+  if (typeof raw === "string" && raw) {
+    return { name: nameFromPath(raw), path: raw };
+  }
+  if (raw && typeof raw === "object") {
+    const obj = raw;
+    const p = typeof obj.path === "string" ? obj.path : null;
+    if (!p) return null;
+    const n = typeof obj.name === "string" && obj.name ? obj.name : nameFromPath(p);
+    return { name: n, path: p };
+  }
+  return null;
+}
 function getProjectsPath(projectRoot) {
   return path2.join(projectRoot, CODEGRAPH_DIR, PROJECTS_FILENAME);
 }
-function loadProjects(projectRoot) {
+function loadProjectEntries(projectRoot) {
   const filePath = getProjectsPath(projectRoot);
   try {
     if (!fs2.existsSync(filePath)) return [];
     const content = fs2.readFileSync(filePath, "utf-8");
     const parsed = JSON.parse(content);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((p) => typeof p === "string");
+    return parsed.map(parseEntry).filter((e) => e !== null);
   } catch (err) {
     process.stderr.write(
       `[CodeGraph] Failed to load projects.json: ${err instanceof Error ? err.message : String(err)}
@@ -3603,30 +3620,41 @@ function loadProjects(projectRoot) {
     return [];
   }
 }
-function saveProjects(projectRoot, projects) {
+function loadProjects(projectRoot) {
+  return loadProjectEntries(projectRoot).map((e) => e.path);
+}
+function saveProjects(projectRoot, entries) {
   const filePath = getProjectsPath(projectRoot);
   const dir = path2.dirname(filePath);
   if (!fs2.existsSync(dir)) {
     fs2.mkdirSync(dir, { recursive: true });
   }
-  const unique = [...new Set(projects)].sort();
+  const byPath = /* @__PURE__ */ new Map();
+  for (const e of entries) byPath.set(e.path, e);
+  const unique = [...byPath.values()].sort((a, b) => a.name.localeCompare(b.name));
   const content = JSON.stringify(unique, null, 2);
   const tmpPath = filePath + ".tmp";
   fs2.writeFileSync(tmpPath, content, "utf-8");
   fs2.renameSync(tmpPath, filePath);
 }
-function addProject(projectRoot, projectPath) {
-  const projects = loadProjects(projectRoot);
-  if (!projects.includes(projectPath)) {
-    projects.push(projectPath);
+function addProject(projectRoot, projectPath, name) {
+  const entries = loadProjectEntries(projectRoot);
+  const resolvedName = name || nameFromPath(projectPath);
+  const existing = entries.findIndex((e) => e.path === projectPath);
+  if (existing >= 0) {
+    entries[existing] = { name: resolvedName, path: projectPath };
+  } else {
+    entries.push({ name: resolvedName, path: projectPath });
   }
-  saveProjects(projectRoot, projects);
-  return projects;
+  saveProjects(projectRoot, entries);
+  return entries;
 }
-function removeProject(projectRoot, projectPath) {
-  const projects = loadProjects(projectRoot).filter((p) => p !== projectPath);
-  saveProjects(projectRoot, projects);
-  return projects;
+function removeProject(projectRoot, pathOrName) {
+  const entries = loadProjectEntries(projectRoot).filter(
+    (e) => e.path !== pathOrName && e.name !== pathOrName
+  );
+  saveProjects(projectRoot, entries);
+  return entries;
 }
 function scanForProjects(root, maxDepth = 3) {
   const results = [];
@@ -3634,13 +3662,13 @@ function scanForProjects(root, maxDepth = 3) {
   while (queue.length > 0) {
     const [currentDir, depth] = queue.shift();
     if (depth > 0 && isInitialized(currentDir)) {
-      const relative5 = path2.relative(root, currentDir).replace(/\\/g, "/");
-      results.push(relative5);
+      const relPath = path2.relative(root, currentDir).replace(/\\/g, "/");
+      results.push({ name: nameFromPath(relPath), path: relPath });
     }
     if (depth > maxDepth) continue;
     try {
-      const entries = fs2.readdirSync(currentDir, { withFileTypes: true });
-      for (const entry of entries) {
+      const dirEntries = fs2.readdirSync(currentDir, { withFileTypes: true });
+      for (const entry of dirEntries) {
         if (entry.isDirectory() && !SCAN_SKIP_DIRS.has(entry.name)) {
           queue.push([path2.join(currentDir, entry.name), depth + 1]);
         }
@@ -3648,24 +3676,29 @@ function scanForProjects(root, maxDepth = 3) {
     } catch {
     }
   }
-  return [...new Set(results)].sort();
+  const byPath = /* @__PURE__ */ new Map();
+  for (const e of results) byPath.set(e.path, e);
+  return [...byPath.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 function findNearestMonorepoRoot(startPath) {
   let current = path2.resolve(startPath);
   const fsRoot = path2.parse(current).root;
   while (current !== fsRoot) {
-    if (loadProjects(current).length > 0) return current;
+    if (loadProjectEntries(current).length > 0) return current;
     const parent = path2.dirname(current);
     if (parent === current) break;
     current = parent;
   }
-  if (loadProjects(current).length > 0) return current;
+  if (loadProjectEntries(current).length > 0) return current;
   return null;
 }
 function syncProjects(root, maxDepth) {
-  const existing = loadProjects(root);
+  const existing = loadProjectEntries(root);
   const discovered = scanForProjects(root, maxDepth);
-  const merged = [.../* @__PURE__ */ new Set([...existing, ...discovered])].sort();
+  const byPath = /* @__PURE__ */ new Map();
+  for (const e of discovered) byPath.set(e.path, e);
+  for (const e of existing) byPath.set(e.path, e);
+  const merged = [...byPath.values()].sort((a, b) => a.name.localeCompare(b.name));
   saveProjects(root, merged);
   return merged;
 }
@@ -3677,11 +3710,7 @@ var init_projects = __esm({
     path2 = __toESM(require("path"));
     init_directory();
     PROJECTS_FILENAME = "projects.json";
-    SCAN_SKIP_DIRS = /* @__PURE__ */ new Set([
-      ".codegraph",
-      ".git",
-      "node_modules"
-    ]);
+    SCAN_SKIP_DIRS = /* @__PURE__ */ new Set([".codegraph", ".git", "node_modules"]);
   }
 });
 
@@ -20993,39 +21022,42 @@ var init_tools = __esm({
           return /* @__PURE__ */ new Map([[".", this.cg]]);
         }
         if (!this.projectRoot) throw new Error("No project root configured. Cannot resolve sub-projects.");
-        const projects = loadProjects(this.projectRoot);
+        const entries = loadProjectEntries(this.projectRoot);
         if (project === "*") {
           const map = /* @__PURE__ */ new Map();
-          map.set(".", this.cg);
-          for (const name of projects) {
-            const absPath2 = (0, import_path.resolve)(this.projectRoot, name);
+          if (this.cg) map.set(".", this.cg);
+          for (const entry2 of entries) {
+            const absPath2 = (0, import_path.resolve)(this.projectRoot, entry2.path);
             const cached2 = this.projectCache.get(absPath2);
             if (cached2) {
-              map.set(name, cached2);
+              map.set(entry2.name, cached2);
               continue;
             }
             try {
               const subCg2 = src_default.openSync(absPath2);
               this.projectCache.set(absPath2, subCg2);
-              this.startWatcherFor(name, absPath2, subCg2);
-              map.set(name, subCg2);
+              this.startWatcherFor(entry2.name, absPath2, subCg2);
+              map.set(entry2.name, subCg2);
             } catch (err) {
-              process.stderr.write(`[CodeGraph MCP] Failed to open sub-project "${name}": ${err}
+              process.stderr.write(`[CodeGraph MCP] Failed to open sub-project "${entry2.name}": ${err}
 `);
             }
           }
           return map;
         }
-        const absPath = (0, import_path.resolve)(this.projectRoot, project);
+        const entry = entries.find((e) => e.name === project || e.path === project);
+        const resolvedPath = entry ? entry.path : project;
+        const label = entry ? entry.name : project;
+        const absPath = (0, import_path.resolve)(this.projectRoot, resolvedPath);
         if (!validatePathWithinRoot(this.projectRoot, absPath)) {
-          throw new Error(`Project path "${project}" is outside the project root`);
+          throw new Error(`Project "${project}" is outside the project root`);
         }
         const cached = this.projectCache.get(absPath);
-        if (cached) return /* @__PURE__ */ new Map([[project, cached]]);
+        if (cached) return /* @__PURE__ */ new Map([[label, cached]]);
         const subCg = src_default.openSync(absPath);
         this.projectCache.set(absPath, subCg);
-        this.startWatcherFor(project, absPath, subCg);
-        return /* @__PURE__ */ new Map([[project, subCg]]);
+        this.startWatcherFor(label, absPath, subCg);
+        return /* @__PURE__ */ new Map([[label, subCg]]);
       }
       /**
        * Start a watcher for a sub-project.
@@ -21070,14 +21102,14 @@ var init_tools = __esm({
         try {
           const stats = this.cg.getStats();
           const budget = getExploreBudget(stats.fileCount);
-          const registeredProjects = this.projectRoot ? loadProjects(this.projectRoot) : [];
-          const projectDesc = registeredProjects.length > 0 ? `Registered sub-project name or "*" for all projects. Uses root project if omitted. Available: ${registeredProjects.map((p) => `"${p}"`).join(", ")}.` : projectProperty.description;
+          const registeredEntries = this.projectRoot ? loadProjectEntries(this.projectRoot) : [];
+          const projectDesc = registeredEntries.length > 0 ? `Sub-project name or "*" for all. Uses root if omitted. Available: ${registeredEntries.map((e) => `"${e.name}" (${e.path})`).join(", ")}.` : projectProperty.description;
           return tools.map((tool) => {
             const patches = {};
             if (tool.name === "codegraph_explore") {
               patches.description = `${tool.description} Budget: make at most ${budget} calls for this project (${stats.fileCount.toLocaleString()} files indexed).`;
             }
-            if (registeredProjects.length > 0 && tool.inputSchema.properties?.project) {
+            if (registeredEntries.length > 0 && tool.inputSchema.properties?.project) {
               patches.inputSchema = {
                 ...tool.inputSchema,
                 properties: {
@@ -21995,22 +22027,26 @@ ${output}`);
           return this.textResult(JSON.stringify({ rootProject: null, projects: [] }, null, 2));
         }
         const checkStatus = args.status !== false;
-        const projectsList = loadProjects(this.projectRoot);
+        const entries = loadProjectEntries(this.projectRoot);
         const projectEntries = [];
-        for (const name of projectsList) {
-          const absPath = (0, import_path.resolve)(this.projectRoot, name);
-          const entry = { name, path: absPath, initialized: isInitialized(absPath) };
-          if (checkStatus && entry.initialized) {
+        for (const entry of entries) {
+          const absPath = (0, import_path.resolve)(this.projectRoot, entry.path);
+          const result = {
+            name: entry.name,
+            path: entry.path,
+            initialized: isInitialized(absPath)
+          };
+          if (checkStatus && result.initialized) {
             try {
               const subCg = src_default.openSync(absPath);
               const stats = subCg.getStats();
-              entry.symbolCount = stats.nodeCount;
-              entry.fileCount = stats.fileCount;
+              result.symbolCount = stats.nodeCount;
+              result.fileCount = stats.fileCount;
               subCg.close();
             } catch {
             }
           }
-          projectEntries.push(entry);
+          projectEntries.push(result);
         }
         return this.textResult(JSON.stringify({ rootProject: this.projectRoot, projects: projectEntries }, null, 2));
       }
@@ -22314,18 +22350,18 @@ var init_mcp = __esm({
        * Eagerly open and cache all registered sub-projects (up to 20).
        */
       async loadSubProjects(projectRoot) {
-        const projects = loadProjects(projectRoot);
-        if (projects.length === 0 || projects.length > 20) return;
-        for (const name of projects) {
-          const absPath = path15.resolve(projectRoot, name);
+        const entries = loadProjectEntries(projectRoot);
+        if (entries.length === 0 || entries.length > 20) return;
+        for (const entry of entries) {
+          const absPath = path15.resolve(projectRoot, entry.path);
           if (isInitialized(absPath)) {
             try {
               const subCg = src_default.openSync(absPath);
               this.toolHandler.addToCache(absPath, subCg);
-              this.toolHandler.startWatcherFor(name, absPath, subCg);
+              this.toolHandler.startWatcherFor(entry.name, absPath, subCg);
             } catch (err) {
               process.stderr.write(
-                `[CodeGraph MCP] Failed to open sub-project "${name}": ${err}
+                `[CodeGraph MCP] Failed to open sub-project "${entry.name}": ${err}
 `
               );
             }
@@ -22547,6 +22583,7 @@ __export(src_exports, {
   isLanguageSupported: () => isLanguageSupported,
   loadAllGrammars: () => loadAllGrammars,
   loadGrammarsForLanguages: () => loadGrammarsForLanguages,
+  loadProjectEntries: () => loadProjectEntries,
   loadProjects: () => loadProjects,
   processInBatches: () => processInBatches,
   removeProject: () => removeProject,
@@ -24543,18 +24580,19 @@ Affected test files (${sortedTests.length}):
       error("CodeGraph not initialized in this project. Run 'codegraph init' first.");
       process.exit(1);
     }
-    const projects = loadProjects(projectRoot);
+    const entries = loadProjectEntries(projectRoot);
     console.log(chalk.bold(`
 Registered projects (root: ${projectRoot}):
 `));
-    if (projects.length === 0) {
+    if (entries.length === 0) {
       console.log("  (none)");
       console.log("");
       return;
     }
     let available = 0;
-    for (const relPath of projects) {
-      const absPath = path19.resolve(projectRoot, relPath);
+    for (const entry of entries) {
+      const absPath = path19.resolve(projectRoot, entry.path);
+      const label = `${chalk.cyan(entry.name.padEnd(20))} ${entry.path}`;
       if (isInitialized(absPath)) {
         available++;
         try {
@@ -24562,27 +24600,28 @@ Registered projects (root: ${projectRoot}):
           const subCg = CodeGraph2.openSync(absPath);
           const stats = subCg.getStats();
           subCg.close();
-          console.log(`  ${relPath.padEnd(30)} ${chalk.green("\u2713")}  (${formatNumber2(stats.nodeCount)} symbols, ${formatNumber2(stats.fileCount)} files)`);
+          console.log(`  ${label.padEnd(50)} ${chalk.green("\u2713")}  (${formatNumber2(stats.nodeCount)} symbols, ${formatNumber2(stats.fileCount)} files)`);
         } catch {
-          console.log(`  ${relPath.padEnd(30)} ${chalk.green("\u2713")}  (unable to read stats)`);
+          console.log(`  ${label.padEnd(50)} ${chalk.green("\u2713")}  (unable to read stats)`);
         }
       } else {
-        console.log(`  ${relPath.padEnd(30)} ${chalk.red("\u2717")}  (not initialized)`);
+        console.log(`  ${label.padEnd(50)} ${chalk.red("\u2717")}  (not initialized)`);
       }
     }
     console.log(`
-  ${available} of ${projects.length} projects available
+  ${available} of ${entries.length} projects available
 `);
   });
-  projectCmd.command("add <path>").description("Register a sub-project path (relative to project root)").action((pathArg) => {
+  projectCmd.command("add <path>").description("Register a sub-project path (relative to project root)").option("-n, --name <name>", "Short alias for MCP tool calls (default: last path segment)").action((pathArg, options) => {
     const projectRoot = resolveProjectPath(process.cwd());
-    addProject(projectRoot, pathArg);
-    success(`Registered project: ${pathArg}`);
+    const entry = addProject(projectRoot, pathArg, options.name);
+    const added = entry.find((e) => e.path === pathArg);
+    success(`Registered project: ${chalk.cyan(added?.name ?? pathArg)} \u2192 ${pathArg}`);
   });
-  projectCmd.command("remove <path>").description("Unregister a sub-project").action((pathArg) => {
+  projectCmd.command("remove <path-or-name>").description("Unregister a sub-project by path or name").action((pathOrName) => {
     const projectRoot = resolveProjectPath(process.cwd());
-    removeProject(projectRoot, pathArg);
-    success(`Removed project: ${pathArg}`);
+    removeProject(projectRoot, pathOrName);
+    success(`Removed project: ${pathOrName}`);
   });
   projectCmd.command("scan").description("Auto-discover initialized sub-projects and merge into registry").option("-d, --depth <number>", "Maximum directory depth to scan", "3").action(async (options) => {
     const depth = parseInt(options.depth || "3", 10);
@@ -24592,10 +24631,10 @@ Registered projects (root: ${projectRoot}):
     if (merged.length === 0) {
       console.log("  No initialized sub-projects found.");
     } else {
-      for (const p of merged) {
-        const absPath = path19.resolve(projectRoot, p);
+      for (const e of merged) {
+        const absPath = path19.resolve(projectRoot, e.path);
         const status = isInitialized(absPath) ? chalk.green("\u2713") : chalk.yellow("(registered but not initialized)");
-        console.log(`  ${p.padEnd(35)} ${status}`);
+        console.log(`  ${chalk.cyan(e.name.padEnd(20))} ${e.path.padEnd(35)} ${status}`);
       }
     }
   });

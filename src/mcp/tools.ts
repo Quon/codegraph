@@ -4,7 +4,7 @@
  * Defines the tools exposed by the CodeGraph MCP server.
  */
 
-import CodeGraph, { findNearestCodeGraphRoot, isInitialized, loadProjects } from '../index';
+import CodeGraph, { findNearestCodeGraphRoot, isInitialized, loadProjectEntries } from '../index';
 import type { Node, Edge, SearchResult, Subgraph, TaskContext, NodeKind } from '../types';
 import { createHash } from 'crypto';
 import { writeFileSync, readFileSync, existsSync } from 'fs';
@@ -379,44 +379,47 @@ export class ToolHandler {
     // Resolve from registry
     if (!this.projectRoot) throw new Error('No project root configured. Cannot resolve sub-projects.');
 
-    const projects = loadProjects(this.projectRoot);
+    const entries = loadProjectEntries(this.projectRoot);
 
     if (project === '*') {
-      // Open all registered projects
       const map = new Map<string, CodeGraph>();
-      map.set('.', this.cg!);
+      if (this.cg) map.set('.', this.cg);
 
-      for (const name of projects) {
-        const absPath = resolvePath(this.projectRoot, name);
+      for (const entry of entries) {
+        const absPath = resolvePath(this.projectRoot, entry.path);
         const cached = this.projectCache.get(absPath);
         if (cached) {
-          map.set(name, cached);
+          map.set(entry.name, cached);
           continue;
         }
         try {
           const subCg = CodeGraph.openSync(absPath);
           this.projectCache.set(absPath, subCg);
-          this.startWatcherFor(name, absPath, subCg);
-          map.set(name, subCg);
+          this.startWatcherFor(entry.name, absPath, subCg);
+          map.set(entry.name, subCg);
         } catch (err) {
-          process.stderr.write(`[CodeGraph MCP] Failed to open sub-project "${name}": ${err}\n`);
+          process.stderr.write(`[CodeGraph MCP] Failed to open sub-project "${entry.name}": ${err}\n`);
         }
       }
       return map;
     }
 
-    // Single named project
-    const absPath = resolvePath(this.projectRoot, project);
+    // Look up by name first, then by path
+    const entry = entries.find((e) => e.name === project || e.path === project);
+    const resolvedPath = entry ? entry.path : project;
+    const label = entry ? entry.name : project;
+
+    const absPath = resolvePath(this.projectRoot, resolvedPath);
     if (!validatePathWithinRoot(this.projectRoot, absPath)) {
-      throw new Error(`Project path "${project}" is outside the project root`);
+      throw new Error(`Project "${project}" is outside the project root`);
     }
     const cached = this.projectCache.get(absPath);
-    if (cached) return new Map([[project, cached]]);
+    if (cached) return new Map([[label, cached]]);
 
     const subCg = CodeGraph.openSync(absPath);
     this.projectCache.set(absPath, subCg);
-    this.startWatcherFor(project, absPath, subCg);
-    return new Map([[project, subCg]]);
+    this.startWatcherFor(label, absPath, subCg);
+    return new Map([[label, subCg]]);
   }
 
   /**
@@ -464,9 +467,9 @@ export class ToolHandler {
       const budget = getExploreBudget(stats.fileCount);
 
       // Build dynamic project description if sub-projects are registered
-      const registeredProjects = this.projectRoot ? loadProjects(this.projectRoot) : [];
-      const projectDesc = registeredProjects.length > 0
-        ? `Registered sub-project name or "*" for all projects. Uses root project if omitted. Available: ${registeredProjects.map(p => `"${p}"`).join(', ')}.`
+      const registeredEntries = this.projectRoot ? loadProjectEntries(this.projectRoot) : [];
+      const projectDesc = registeredEntries.length > 0
+        ? `Sub-project name or "*" for all. Uses root if omitted. Available: ${registeredEntries.map(e => `"${e.name}" (${e.path})`).join(', ')}.`
         : projectProperty.description;
 
       return tools.map(tool => {
@@ -476,7 +479,7 @@ export class ToolHandler {
           patches.description = `${tool.description} Budget: make at most ${budget} calls for this project (${stats.fileCount.toLocaleString()} files indexed).`;
         }
 
-        if (registeredProjects.length > 0 && tool.inputSchema.properties?.project) {
+        if (registeredEntries.length > 0 && tool.inputSchema.properties?.project) {
           patches.inputSchema = {
             ...tool.inputSchema,
             properties: {
@@ -1629,22 +1632,26 @@ export class ToolHandler {
     }
 
     const checkStatus = args.status !== false;
-    const projectsList = loadProjects(this.projectRoot);
+    const entries = loadProjectEntries(this.projectRoot);
 
     const projectEntries: Array<Record<string, unknown>> = [];
-    for (const name of projectsList) {
-      const absPath = resolvePath(this.projectRoot, name);
-      const entry: Record<string, unknown> = { name, path: absPath, initialized: isInitialized(absPath) };
-      if (checkStatus && entry.initialized) {
+    for (const entry of entries) {
+      const absPath = resolvePath(this.projectRoot, entry.path);
+      const result: Record<string, unknown> = {
+        name: entry.name,
+        path: entry.path,
+        initialized: isInitialized(absPath),
+      };
+      if (checkStatus && result.initialized) {
         try {
           const subCg = CodeGraph.openSync(absPath);
           const stats = subCg.getStats();
-          entry.symbolCount = stats.nodeCount;
-          entry.fileCount = stats.fileCount;
+          result.symbolCount = stats.nodeCount;
+          result.fileCount = stats.fileCount;
           subCg.close();
         } catch { /* skip stats on error */ }
       }
-      projectEntries.push(entry);
+      projectEntries.push(result);
     }
 
     return this.textResult(JSON.stringify({ rootProject: this.projectRoot, projects: projectEntries }, null, 2));

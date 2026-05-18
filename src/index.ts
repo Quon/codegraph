@@ -62,7 +62,9 @@ export {
 } from './directory';
 export {
   PROJECTS_FILENAME,
+  ProjectEntry,
   getProjectsPath,
+  loadProjectEntries,
   loadProjects,
   saveProjects,
   addProject,

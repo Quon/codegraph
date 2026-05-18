@@ -23,7 +23,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { getCodeGraphDir, isInitialized } from '../directory';
 import {
-  loadProjects,
+  loadProjectEntries,
   addProject,
   removeProject,
   syncProjects,
@@ -1306,55 +1306,57 @@ projectCmd
       process.exit(1);
     }
 
-    const projects = loadProjects(projectRoot);
+    const entries = loadProjectEntries(projectRoot);
 
     console.log(chalk.bold(`\nRegistered projects (root: ${projectRoot}):\n`));
 
-    if (projects.length === 0) {
+    if (entries.length === 0) {
       console.log('  (none)');
       console.log('');
       return;
     }
 
     let available = 0;
-    for (const relPath of projects) {
-      const absPath = path.resolve(projectRoot, relPath);
+    for (const entry of entries) {
+      const absPath = path.resolve(projectRoot, entry.path);
+      const label = `${chalk.cyan(entry.name.padEnd(20))} ${entry.path}`;
       if (isInitialized(absPath)) {
         available++;
-        // Get basic stats from the sub-project
         try {
           const { default: CodeGraph } = await loadCodeGraph();
           const subCg = CodeGraph.openSync(absPath);
           const stats = subCg.getStats();
           subCg.close();
-          console.log(`  ${relPath.padEnd(30)} ${chalk.green('✓')}  (${formatNumber(stats.nodeCount)} symbols, ${formatNumber(stats.fileCount)} files)`);
+          console.log(`  ${label.padEnd(50)} ${chalk.green('✓')}  (${formatNumber(stats.nodeCount)} symbols, ${formatNumber(stats.fileCount)} files)`);
         } catch {
-          console.log(`  ${relPath.padEnd(30)} ${chalk.green('✓')}  (unable to read stats)`);
+          console.log(`  ${label.padEnd(50)} ${chalk.green('✓')}  (unable to read stats)`);
         }
       } else {
-        console.log(`  ${relPath.padEnd(30)} ${chalk.red('✗')}  (not initialized)`);
+        console.log(`  ${label.padEnd(50)} ${chalk.red('✗')}  (not initialized)`);
       }
     }
 
-    console.log(`\n  ${available} of ${projects.length} projects available\n`);
+    console.log(`\n  ${available} of ${entries.length} projects available\n`);
   });
 
 projectCmd
   .command('add <path>')
   .description('Register a sub-project path (relative to project root)')
-  .action((pathArg: string) => {
+  .option('-n, --name <name>', 'Short alias for MCP tool calls (default: last path segment)')
+  .action((pathArg: string, options: { name?: string }) => {
     const projectRoot = resolveProjectPath(process.cwd());
-    addProject(projectRoot, pathArg);
-    success(`Registered project: ${pathArg}`);
+    const entry = addProject(projectRoot, pathArg, options.name);
+    const added = entry.find(e => e.path === pathArg);
+    success(`Registered project: ${chalk.cyan(added?.name ?? pathArg)} → ${pathArg}`);
   });
 
 projectCmd
-  .command('remove <path>')
-  .description('Unregister a sub-project')
-  .action((pathArg: string) => {
+  .command('remove <path-or-name>')
+  .description('Unregister a sub-project by path or name')
+  .action((pathOrName: string) => {
     const projectRoot = resolveProjectPath(process.cwd());
-    removeProject(projectRoot, pathArg);
-    success(`Removed project: ${pathArg}`);
+    removeProject(projectRoot, pathOrName);
+    success(`Removed project: ${pathOrName}`);
   });
 
 projectCmd
@@ -1371,12 +1373,12 @@ projectCmd
     if (merged.length === 0) {
       console.log('  No initialized sub-projects found.');
     } else {
-      for (const p of merged) {
-        const absPath = path.resolve(projectRoot, p);
+      for (const e of merged) {
+        const absPath = path.resolve(projectRoot, e.path);
         const status = isInitialized(absPath)
           ? chalk.green('✓')
           : chalk.yellow('(registered but not initialized)');
-        console.log(`  ${p.padEnd(35)} ${status}`);
+        console.log(`  ${chalk.cyan(e.name.padEnd(20))} ${e.path.padEnd(35)} ${status}`);
       }
     }
   });

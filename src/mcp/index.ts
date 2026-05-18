@@ -16,7 +16,7 @@
  */
 
 import * as path from 'path';
-import CodeGraph, { findNearestCodeGraphRoot, findNearestMonorepoRoot, isInitialized, loadProjects } from '../index';
+import CodeGraph, { findNearestCodeGraphRoot, findNearestMonorepoRoot, isInitialized, loadProjectEntries } from '../index';
 import { StdioTransport, JsonRpcRequest, JsonRpcNotification, ErrorCodes } from './transport';
 import { tools, ToolHandler } from './tools';
 import { SERVER_INSTRUCTIONS } from './server-instructions';
@@ -139,19 +139,19 @@ export class MCPServer {
    * Eagerly open and cache all registered sub-projects (up to 20).
    */
   private async loadSubProjects(projectRoot: string): Promise<void> {
-    const projects = loadProjects(projectRoot);
-    if (projects.length === 0 || projects.length > 20) return;
+    const entries = loadProjectEntries(projectRoot);
+    if (entries.length === 0 || entries.length > 20) return;
 
-    for (const name of projects) {
-      const absPath = path.resolve(projectRoot, name);
+    for (const entry of entries) {
+      const absPath = path.resolve(projectRoot, entry.path);
       if (isInitialized(absPath)) {
         try {
           const subCg = CodeGraph.openSync(absPath);
           this.toolHandler.addToCache(absPath, subCg);
-          this.toolHandler.startWatcherFor(name, absPath, subCg);
+          this.toolHandler.startWatcherFor(entry.name, absPath, subCg);
         } catch (err) {
           process.stderr.write(
-            `[CodeGraph MCP] Failed to open sub-project "${name}": ${err}\n`
+            `[CodeGraph MCP] Failed to open sub-project "${entry.name}": ${err}\n`
           );
         }
       }
