@@ -11894,7 +11894,7 @@ function logWarn(message, context) {
 var import_picomatch2 = __toESM(require_picomatch2());
 var FILE_IO_BATCH_SIZE = 10;
 var PARSE_TIMEOUT_MS = 1e4;
-var WORKER_RECYCLE_INTERVAL = 250;
+var WORKER_RECYCLE_INTERVAL = 150;
 function hashContent(content) {
   return crypto2.createHash("sha256").update(content).digest("hex");
 }
