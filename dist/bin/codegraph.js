@@ -23392,10 +23392,10 @@ function getMcpServerConfig() {
     type: "stdio",
     ...isWin ? {
       command: "cmd",
-      args: ["/c", "npx", "-y", "github:Quon/codegraph", "serve", "--mcp"]
+      args: ["/c", "codegraph", "serve", "--mcp"]
     } : {
-      command: "npx",
-      args: ["-y", "github:Quon/codegraph", "serve", "--mcp"]
+      command: "codegraph",
+      args: ["serve", "--mcp"]
     }
   };
 }
@@ -23530,7 +23530,7 @@ async function runInstaller() {
   const clack = await importESM("@clack/prompts");
   clack.intro(`CodeGraph v${getVersion()}`);
   const shouldInstallGlobally = await clack.confirm({
-    message: "Install codegraph globally? (MCP server now uses npx, so this is optional)",
+    message: "Install codegraph globally? (required for MCP server)",
     initialValue: true
   });
   if (clack.isCancel(shouldInstallGlobally)) {
@@ -23561,7 +23561,7 @@ async function runInstaller() {
       clack.log.warn("Try: sudo npm install -g https://github.com/Quon/codegraph/archive/refs/heads/main.tar.gz");
     }
   } else {
-    clack.log.info("Skipped global install \u2014 MCP server uses npx, so it will still work");
+    clack.log.warn("Skipped global install \u2014 run `npm install -g` manually before starting the MCP server");
   }
   const location = await clack.select({
     message: "Where would you like to install?",
