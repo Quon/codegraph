@@ -16229,7 +16229,7 @@ var init_extraction = __esm({
           if (parseWorker) return parseWorker;
           log("Spawning new parse worker...");
           parseWorker = (0, import_child_process.fork)(parseWorkerPath, [], {
-            execArgv: ["--no-wasm-tier-up"]
+            execArgv: ["--no-wasm-tier-up", "--max-old-space-size=4096"]
           });
           attachWorkerHandlers(parseWorker);
           return parseWorker;

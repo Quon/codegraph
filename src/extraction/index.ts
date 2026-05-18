@@ -631,7 +631,7 @@ export class ExtractionOrchestrator {
       // JIT-optimising WASM functions with TurboFan. Tier-up background
       // threads exhaust Zone memory after many parses and cause fatal OOM.
       parseWorker = forkProcess(parseWorkerPath, [], {
-        execArgv: ['--no-wasm-tier-up'],
+        execArgv: ['--no-wasm-tier-up', '--max-old-space-size=4096'],
       });
       attachWorkerHandlers(parseWorker);
       return parseWorker;
