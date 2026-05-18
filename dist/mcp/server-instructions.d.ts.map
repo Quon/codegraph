@@ -1,1 +1,1 @@
-{"version":3,"file":"server-instructions.d.ts","sourceRoot":"","sources":["../../src/mcp/server-instructions.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;;;;GAgBG;AACH,eAAO,MAAM,mBAAmB,s7EAqC/B,CAAC"}
+{"version":3,"file":"server-instructions.d.ts","sourceRoot":"","sources":["../../src/mcp/server-instructions.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;;;;GAgBG;AAEH,OAAO,KAAK,EAAE,YAAY,EAAE,MAAM,aAAa,CAAC;AAEhD,eAAO,MAAM,mBAAmB,s7EAqC/B,CAAC;AAEF;;;GAGG;AACH,wBAAgB,iBAAiB,CAAC,QAAQ,EAAE,YAAY,EAAE,GAAG,MAAM,CAmBlE"}

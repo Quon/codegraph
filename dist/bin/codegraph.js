@@ -22206,6 +22206,22 @@ ${output}`);
 });
 
 // src/mcp/server-instructions.ts
+function buildInstructions(projects) {
+  if (projects.length === 0) return SERVER_INSTRUCTIONS;
+  const projectList = projects.map((e) => `- **${e.name}** \u2192 \`${e.path}\``).join("\n");
+  return SERVER_INSTRUCTIONS + `
+## Monorepo \u2014 this workspace has multiple indexed projects
+
+This is a monorepo. Each sub-project has its own CodeGraph index.
+Pass the \`project\` parameter to any tool to target a specific project.
+
+Available projects:
+${projectList}
+
+Use \`project: "*"\` to query all projects simultaneously.
+Always specify \`project\` when the user's question is clearly scoped to one package.
+`;
+}
 var SERVER_INSTRUCTIONS;
 var init_server_instructions = __esm({
   "src/mcp/server-instructions.ts"() {
@@ -22493,13 +22509,14 @@ var init_mcp = __esm({
           projectPath = process.cwd();
         }
         await this.tryInitializeDefault(projectPath);
+        const projectEntries = this.projectPath ? loadProjectEntries(this.projectPath) : [];
         this.transport.sendResult(request.id, {
           protocolVersion: PROTOCOL_VERSION,
           capabilities: {
             tools: {}
           },
           serverInfo: SERVER_INFO,
-          instructions: SERVER_INSTRUCTIONS
+          instructions: buildInstructions(projectEntries)
         });
       }
       /**

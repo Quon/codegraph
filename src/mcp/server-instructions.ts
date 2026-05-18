@@ -15,6 +15,9 @@
  * burn tokens. Reference only tools that exist on `main`; gate any
  * conditional tools behind feature checks if/when they ship.
  */
+
+import type { ProjectEntry } from '../projects';
+
 export const SERVER_INSTRUCTIONS = `# Codegraph — code intelligence over an indexed knowledge graph
 
 Codegraph is a SQLite knowledge graph of every symbol, edge, and file
@@ -53,3 +56,29 @@ editing code, not during.
 - Cross-file resolution is best-effort name matching; ambiguous calls may return multiple candidates.
 - No live correctness validation — that's still the TypeScript compiler / test suite / linter's job. Codegraph supplements those with structural context they don't have.
 `;
+
+/**
+ * Build the full instructions string for the MCP initialize response.
+ * Appends a monorepo section when sub-projects are registered.
+ */
+export function buildInstructions(projects: ProjectEntry[]): string {
+  if (projects.length === 0) return SERVER_INSTRUCTIONS;
+
+  const projectList = projects
+    .map((e) => `- **${e.name}** → \`${e.path}\``)
+    .join('\n');
+
+  return SERVER_INSTRUCTIONS + `
+## Monorepo — this workspace has multiple indexed projects
+
+This is a monorepo. Each sub-project has its own CodeGraph index.
+Pass the \`project\` parameter to any tool to target a specific project.
+
+Available projects:
+${projectList}
+
+Use \`project: "*"\` to query all projects simultaneously.
+Always specify \`project\` when the user's question is clearly scoped to one package.
+`;
+}
+

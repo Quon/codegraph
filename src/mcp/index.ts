@@ -19,7 +19,7 @@ import * as path from 'path';
 import CodeGraph, { findNearestCodeGraphRoot, findNearestMonorepoRoot, isInitialized, loadProjectEntries } from '../index';
 import { StdioTransport, JsonRpcRequest, JsonRpcNotification, ErrorCodes } from './transport';
 import { tools, ToolHandler } from './tools';
-import { SERVER_INSTRUCTIONS } from './server-instructions';
+import { buildInstructions } from './server-instructions';
 
 /**
  * Convert a file:// URI to a filesystem path.
@@ -311,6 +311,9 @@ export class MCPServer {
     // Try to initialize the default project (non-fatal if it fails)
     await this.tryInitializeDefault(projectPath);
 
+    // Build instructions: append monorepo section if sub-projects are registered
+    const projectEntries = this.projectPath ? loadProjectEntries(this.projectPath) : [];
+
     // We accept the client's protocol version but respond with our supported version.
     // The `instructions` field is surfaced by MCP clients in the agent's system
     // prompt automatically — it's the right place for the universal tool-selection
@@ -321,7 +324,7 @@ export class MCPServer {
         tools: {},
       },
       serverInfo: SERVER_INFO,
-      instructions: SERVER_INSTRUCTIONS,
+      instructions: buildInstructions(projectEntries),
     });
   }
 
