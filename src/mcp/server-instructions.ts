@@ -18,43 +18,26 @@
 
 import type { ProjectEntry } from '../projects';
 
-export const SERVER_INSTRUCTIONS = `# Codegraph — code intelligence over an indexed knowledge graph
+export const SERVER_INSTRUCTIONS = `# Codegraph — code intelligence
 
-Codegraph is a SQLite knowledge graph of every symbol, edge, and file
-in the workspace. Reads are sub-millisecond; the index lags writes by
-about a second through the file watcher. Consult it BEFORE writing or
-editing code, not during.
+SQLite knowledge graph of every symbol, edge, and file. Consult it BEFORE writing code.
 
-## Tool selection by intent
+## Tool by intent
 
-- **"What is the symbol named X?"** → \`codegraph_search\`
-- **"What's the deal with this task / feature / area?"** → \`codegraph_context\` (PRIMARY — composes search + node + callers + callees in one call)
-- **"What calls this?"** → \`codegraph_callers\`
-- **"What does this call?"** → \`codegraph_callees\`
-- **"What would changing this break?"** → \`codegraph_impact\`
-- **"Show me this symbol's source / signature / docstring."** → \`codegraph_node\`
-- **"Survey an unfamiliar topic / pattern / module."** → \`codegraph_explore\` (heavier; deep dive)
-- **"What's in directory X?"** → \`codegraph_files\`
-- **"Is the index ready / what's its size?"** → \`codegraph_status\`
+| Question | Tool |
+|---|---|
+| Find symbol by name | \`codegraph_search\` |
+| Understand a task/feature/area | \`codegraph_context\` ← PRIMARY |
+| What calls this? | \`codegraph_callers\` |
+| What does this call? | \`codegraph_callees\` |
+| What breaks if I change this? | \`codegraph_impact\` |
+| Full source of one symbol | \`codegraph_node\` |
+| Survey an unfamiliar module | \`codegraph_explore\` |
+| Directory structure | \`codegraph_files\` |
 
-## Common chains
-
-- **Onboarding**: \`codegraph_context\` first. If still unclear, \`codegraph_explore\` for breadth, then \`codegraph_node\` on specific symbols.
-- **Refactor planning**: \`codegraph_search\` → \`codegraph_callers\` → \`codegraph_impact\`. The blast-radius answer comes from impact, not from walking callers manually.
-- **Debugging a regression**: \`codegraph_callers\` of the suspected symbol; widen with \`codegraph_impact\` if an unexpected call appears.
-
-## Anti-patterns
-
-- **Don't grep first** when looking up a symbol by name — \`codegraph_search\` is faster and returns kind + location + signature.
-- **Don't chain \`codegraph_search\` + \`codegraph_node\`** when you just want context — \`codegraph_context\` is one round-trip.
-- **Don't use \`codegraph_explore\` for narrow questions** — it's a multi-call deep dive, expensive in tokens. Save it for genuine "I'm new here" surveys.
-- **Don't query the index immediately after editing a file** — the watcher needs ~500ms to debounce + sync. Wait for the next turn.
-
-## Limitations
-
-- Index lags file writes by ~1 second.
-- Cross-file resolution is best-effort name matching; ambiguous calls may return multiple candidates.
-- No live correctness validation — that's still the TypeScript compiler / test suite / linter's job. Codegraph supplements those with structural context they don't have.
+Use \`codegraph_context\` first — it composes search + callers + callees in one call.
+Don't grep for symbol names; \`codegraph_search\` is faster.
+Don't chain search → node when you want context — that's one \`codegraph_context\` call.
 `;
 
 /**
@@ -64,21 +47,12 @@ editing code, not during.
 export function buildInstructions(projects: ProjectEntry[]): string {
   if (projects.length === 0) return SERVER_INSTRUCTIONS;
 
-  const projectList = projects
-    .map((e) => `- **${e.name}** → \`${e.path}\``)
-    .join('\n');
-
   return SERVER_INSTRUCTIONS + `
-## Monorepo — this workspace has multiple indexed projects
+## Monorepo
 
-This is a monorepo. Each sub-project has its own CodeGraph index.
-Pass the \`project\` parameter to any tool to target a specific project.
+This workspace has multiple indexed sub-projects. Pass \`project: "<name>"\` to any tool to target one, or \`project: "*"\` for all.
 
-Available projects:
-${projectList}
-
-Use \`project: "*"\` to query all projects simultaneously.
-Always specify \`project\` when the user's question is clearly scoped to one package.
+${projects.map((e) => `- **${e.name}** → \`${e.path}\``).join('\n')}
 `;
 }
 

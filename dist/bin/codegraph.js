@@ -22208,61 +22208,38 @@ ${output}`);
 // src/mcp/server-instructions.ts
 function buildInstructions(projects) {
   if (projects.length === 0) return SERVER_INSTRUCTIONS;
-  const projectList = projects.map((e) => `- **${e.name}** \u2192 \`${e.path}\``).join("\n");
   return SERVER_INSTRUCTIONS + `
-## Monorepo \u2014 this workspace has multiple indexed projects
+## Monorepo
 
-This is a monorepo. Each sub-project has its own CodeGraph index.
-Pass the \`project\` parameter to any tool to target a specific project.
+This workspace has multiple indexed sub-projects. Pass \`project: "<name>"\` to any tool to target one, or \`project: "*"\` for all.
 
-Available projects:
-${projectList}
-
-Use \`project: "*"\` to query all projects simultaneously.
-Always specify \`project\` when the user's question is clearly scoped to one package.
+${projects.map((e) => `- **${e.name}** \u2192 \`${e.path}\``).join("\n")}
 `;
 }
 var SERVER_INSTRUCTIONS;
 var init_server_instructions = __esm({
   "src/mcp/server-instructions.ts"() {
     "use strict";
-    SERVER_INSTRUCTIONS = `# Codegraph \u2014 code intelligence over an indexed knowledge graph
+    SERVER_INSTRUCTIONS = `# Codegraph \u2014 code intelligence
 
-Codegraph is a SQLite knowledge graph of every symbol, edge, and file
-in the workspace. Reads are sub-millisecond; the index lags writes by
-about a second through the file watcher. Consult it BEFORE writing or
-editing code, not during.
+SQLite knowledge graph of every symbol, edge, and file. Consult it BEFORE writing code.
 
-## Tool selection by intent
+## Tool by intent
 
-- **"What is the symbol named X?"** \u2192 \`codegraph_search\`
-- **"What's the deal with this task / feature / area?"** \u2192 \`codegraph_context\` (PRIMARY \u2014 composes search + node + callers + callees in one call)
-- **"What calls this?"** \u2192 \`codegraph_callers\`
-- **"What does this call?"** \u2192 \`codegraph_callees\`
-- **"What would changing this break?"** \u2192 \`codegraph_impact\`
-- **"Show me this symbol's source / signature / docstring."** \u2192 \`codegraph_node\`
-- **"Survey an unfamiliar topic / pattern / module."** \u2192 \`codegraph_explore\` (heavier; deep dive)
-- **"What's in directory X?"** \u2192 \`codegraph_files\`
-- **"Is the index ready / what's its size?"** \u2192 \`codegraph_status\`
+| Question | Tool |
+|---|---|
+| Find symbol by name | \`codegraph_search\` |
+| Understand a task/feature/area | \`codegraph_context\` \u2190 PRIMARY |
+| What calls this? | \`codegraph_callers\` |
+| What does this call? | \`codegraph_callees\` |
+| What breaks if I change this? | \`codegraph_impact\` |
+| Full source of one symbol | \`codegraph_node\` |
+| Survey an unfamiliar module | \`codegraph_explore\` |
+| Directory structure | \`codegraph_files\` |
 
-## Common chains
-
-- **Onboarding**: \`codegraph_context\` first. If still unclear, \`codegraph_explore\` for breadth, then \`codegraph_node\` on specific symbols.
-- **Refactor planning**: \`codegraph_search\` \u2192 \`codegraph_callers\` \u2192 \`codegraph_impact\`. The blast-radius answer comes from impact, not from walking callers manually.
-- **Debugging a regression**: \`codegraph_callers\` of the suspected symbol; widen with \`codegraph_impact\` if an unexpected call appears.
-
-## Anti-patterns
-
-- **Don't grep first** when looking up a symbol by name \u2014 \`codegraph_search\` is faster and returns kind + location + signature.
-- **Don't chain \`codegraph_search\` + \`codegraph_node\`** when you just want context \u2014 \`codegraph_context\` is one round-trip.
-- **Don't use \`codegraph_explore\` for narrow questions** \u2014 it's a multi-call deep dive, expensive in tokens. Save it for genuine "I'm new here" surveys.
-- **Don't query the index immediately after editing a file** \u2014 the watcher needs ~500ms to debounce + sync. Wait for the next turn.
-
-## Limitations
-
-- Index lags file writes by ~1 second.
-- Cross-file resolution is best-effort name matching; ambiguous calls may return multiple candidates.
-- No live correctness validation \u2014 that's still the TypeScript compiler / test suite / linter's job. Codegraph supplements those with structural context they don't have.
+Use \`codegraph_context\` first \u2014 it composes search + callers + callees in one call.
+Don't grep for symbol names; \`codegraph_search\` is faster.
+Don't chain search \u2192 node when you want context \u2014 that's one \`codegraph_context\` call.
 `;
   }
 });
