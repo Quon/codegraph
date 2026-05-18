@@ -11871,7 +11871,7 @@ function logWarn(message, context) {
 var import_picomatch2 = __toESM(require_picomatch2());
 var FILE_IO_BATCH_SIZE = 10;
 var PARSE_TIMEOUT_MS = 1e4;
-var WORKER_RECYCLE_INTERVAL = 250;
+var WORKER_RECYCLE_INTERVAL = 50;
 function hashContent(content) {
   return crypto2.createHash("sha256").update(content).digest("hex");
 }
@@ -12248,7 +12248,9 @@ var ExtractionOrchestrator = class {
     async function ensureWorker() {
       if (parseWorker) return parseWorker;
       log("Spawning new parse worker...");
-      parseWorker = new WorkerClass(parseWorkerPath);
+      parseWorker = new WorkerClass(parseWorkerPath, {
+        execArgv: ["--max-old-space-size=4096"]
+      });
       attachWorkerHandlers(parseWorker);
       await new Promise((resolve9, reject) => {
         parseWorker.once("message", (msg) => {

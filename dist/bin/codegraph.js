@@ -16035,7 +16035,7 @@ var init_extraction = __esm({
     init_grammars();
     FILE_IO_BATCH_SIZE = 10;
     PARSE_TIMEOUT_MS = 1e4;
-    WORKER_RECYCLE_INTERVAL = 250;
+    WORKER_RECYCLE_INTERVAL = 50;
     CODEGRAPH_IGNORE_MARKER = ".codegraphignore";
     ExtractionOrchestrator = class {
       rootDir;
@@ -16206,7 +16206,9 @@ var init_extraction = __esm({
         async function ensureWorker() {
           if (parseWorker) return parseWorker;
           log("Spawning new parse worker...");
-          parseWorker = new WorkerClass(parseWorkerPath);
+          parseWorker = new WorkerClass(parseWorkerPath, {
+            execArgv: ["--max-old-space-size=4096"]
+          });
           attachWorkerHandlers(parseWorker);
           await new Promise((resolve10, reject) => {
             parseWorker.once("message", (msg) => {

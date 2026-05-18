@@ -47,7 +47,7 @@ const PARSE_TIMEOUT_MS = 10_000;
  * V8 isolate by terminating the worker thread and spawning a fresh one.
  * This interval balances memory usage against the cost of reloading grammars.
  */
-const WORKER_RECYCLE_INTERVAL = 250;
+const WORKER_RECYCLE_INTERVAL = 50;
 
 /**
  * Progress callback for indexing operations
@@ -627,7 +627,9 @@ export class ExtractionOrchestrator {
     async function ensureWorker(): Promise<import('worker_threads').Worker> {
       if (parseWorker) return parseWorker;
       log('Spawning new parse worker...');
-      parseWorker = new WorkerClass!(parseWorkerPath);
+      parseWorker = new WorkerClass!(parseWorkerPath, {
+        execArgv: ['--max-old-space-size=4096'],
+      });
       attachWorkerHandlers(parseWorker);
 
       // Load grammars in the new worker
