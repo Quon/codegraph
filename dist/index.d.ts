@@ -12,7 +12,7 @@ export * from './types';
 export { getDatabasePath } from './db';
 export { getConfigPath } from './config';
 export { getCodeGraphDir, isInitialized, findNearestCodeGraphRoot, CODEGRAPH_DIR, } from './directory';
-export { PROJECTS_FILENAME, getProjectsPath, loadProjects, saveProjects, addProject, removeProject, scanForProjects, syncProjects, } from './projects';
+export { PROJECTS_FILENAME, getProjectsPath, loadProjects, saveProjects, addProject, removeProject, scanForProjects, syncProjects, findNearestMonorepoRoot, } from './projects';
 export { IndexProgress, IndexResult, SyncResult } from './extraction';
 export { detectLanguage, isLanguageSupported, isGrammarLoaded, getSupportedLanguages, initGrammars, loadGrammarsForLanguages, loadAllGrammars } from './extraction';
 export { ResolutionResult } from './resolution';

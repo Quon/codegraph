@@ -69,6 +69,7 @@ export {
   removeProject,
   scanForProjects,
   syncProjects,
+  findNearestMonorepoRoot,
 } from './projects';
 export { IndexProgress, IndexResult, SyncResult } from './extraction';
 export { detectLanguage, isLanguageSupported, isGrammarLoaded, getSupportedLanguages, initGrammars, loadGrammarsForLanguages, loadAllGrammars } from './extraction';

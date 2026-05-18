@@ -16,7 +16,7 @@
  */
 
 import * as path from 'path';
-import CodeGraph, { findNearestCodeGraphRoot, isInitialized, loadProjects } from '../index';
+import CodeGraph, { findNearestCodeGraphRoot, findNearestMonorepoRoot, isInitialized, loadProjects } from '../index';
 import { StdioTransport, JsonRpcRequest, JsonRpcNotification, ErrorCodes } from './transport';
 import { tools, ToolHandler } from './tools';
 import { SERVER_INSTRUCTIONS } from './server-instructions';
@@ -108,7 +108,15 @@ export class MCPServer {
     const resolvedRoot = findNearestCodeGraphRoot(projectPath);
 
     if (!resolvedRoot) {
-      this.projectPath = projectPath;
+      // No indexed root — check if this is a monorepo container (has projects.json)
+      const monorepoRoot = findNearestMonorepoRoot(projectPath);
+      if (monorepoRoot) {
+        this.projectPath = monorepoRoot;
+        this.toolHandler.setProjectRoot(monorepoRoot);
+        await this.loadSubProjects(monorepoRoot);
+      } else {
+        this.projectPath = projectPath;
+      }
       return;
     }
 
@@ -118,31 +126,35 @@ export class MCPServer {
       this.cg = await CodeGraph.open(resolvedRoot);
       this.toolHandler.setDefaultCodeGraph(this.cg);
       this.toolHandler.setProjectRoot(resolvedRoot);
-
-      // Eagerly open sub-projects (<=20)
-      const projects = loadProjects(resolvedRoot);
-      if (projects.length > 0 && projects.length <= 20) {
-        for (const name of projects) {
-          const absPath = path.resolve(resolvedRoot, name);
-          if (isInitialized(absPath)) {
-            try {
-              const subCg = CodeGraph.openSync(absPath);
-              this.toolHandler.addToCache(absPath, subCg);
-              this.toolHandler.startWatcherFor(name, absPath, subCg);
-            } catch (err) {
-              process.stderr.write(
-                `[CodeGraph MCP] Failed to open sub-project "${name}": ${err}\n`
-              );
-            }
-          }
-        }
-      }
-
+      await this.loadSubProjects(resolvedRoot);
       this.startWatching();
     } catch (err) {
       // Log the error so transient failures are diagnosable (see issue #47)
       const msg = err instanceof Error ? err.message : String(err);
       process.stderr.write(`[CodeGraph MCP] Failed to open project at ${resolvedRoot}: ${msg}\n`);
+    }
+  }
+
+  /**
+   * Eagerly open and cache all registered sub-projects (up to 20).
+   */
+  private async loadSubProjects(projectRoot: string): Promise<void> {
+    const projects = loadProjects(projectRoot);
+    if (projects.length === 0 || projects.length > 20) return;
+
+    for (const name of projects) {
+      const absPath = path.resolve(projectRoot, name);
+      if (isInitialized(absPath)) {
+        try {
+          const subCg = CodeGraph.openSync(absPath);
+          this.toolHandler.addToCache(absPath, subCg);
+          this.toolHandler.startWatcherFor(name, absPath, subCg);
+        } catch (err) {
+          process.stderr.write(
+            `[CodeGraph MCP] Failed to open sub-project "${name}": ${err}\n`
+          );
+        }
+      }
     }
   }
 
@@ -159,10 +171,18 @@ export class MCPServer {
     if (!this.projectPath) return;
 
     const resolvedRoot = findNearestCodeGraphRoot(this.projectPath);
-    if (!resolvedRoot) return;
+    if (!resolvedRoot) {
+      // Check if it became a monorepo root since last attempt
+      const monorepoRoot = findNearestMonorepoRoot(this.projectPath);
+      if (monorepoRoot && monorepoRoot !== this.projectPath) {
+        this.projectPath = monorepoRoot;
+        this.toolHandler.setProjectRoot(monorepoRoot);
+        this.loadSubProjects(monorepoRoot).catch(() => {});
+      }
+      return;
+    }
 
     try {
-      // Close any previously failed instance to avoid leaking resources
       if (this.cg) {
         try { this.cg.close(); } catch { /* ignore */ }
         this.cg = null;

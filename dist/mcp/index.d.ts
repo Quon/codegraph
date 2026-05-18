@@ -45,6 +45,10 @@ export declare class MCPServer {
      */
     private tryInitializeDefault;
     /**
+     * Eagerly open and cache all registered sub-projects (up to 20).
+     */
+    private loadSubProjects;
+    /**
      * Retry initialization of the default project if it previously failed.
      * Called lazily on tool calls that need the default project.
      * Re-walks parent directories each time so it picks up projects

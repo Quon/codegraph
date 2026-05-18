@@ -305,7 +305,7 @@ export const tools: ToolDefinition[] = [
   },
   {
     name: 'codegraph_projects',
-    description: 'List registered sub-projects with initialization status.',
+    description: 'List registered sub-projects with initialization status. In a monorepo, call this first to discover available sub-project names, then pass the name as the `project` parameter to any other tool.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -463,14 +463,30 @@ export class ToolHandler {
       const stats = this.cg.getStats();
       const budget = getExploreBudget(stats.fileCount);
 
+      // Build dynamic project description if sub-projects are registered
+      const registeredProjects = this.projectRoot ? loadProjects(this.projectRoot) : [];
+      const projectDesc = registeredProjects.length > 0
+        ? `Registered sub-project name or "*" for all projects. Uses root project if omitted. Available: ${registeredProjects.map(p => `"${p}"`).join(', ')}.`
+        : projectProperty.description;
+
       return tools.map(tool => {
+        const patches: Partial<ToolDefinition> = {};
+
         if (tool.name === 'codegraph_explore') {
-          return {
-            ...tool,
-            description: `${tool.description} Budget: make at most ${budget} calls for this project (${stats.fileCount.toLocaleString()} files indexed).`,
+          patches.description = `${tool.description} Budget: make at most ${budget} calls for this project (${stats.fileCount.toLocaleString()} files indexed).`;
+        }
+
+        if (registeredProjects.length > 0 && tool.inputSchema.properties?.project) {
+          patches.inputSchema = {
+            ...tool.inputSchema,
+            properties: {
+              ...tool.inputSchema.properties,
+              project: { ...tool.inputSchema.properties.project, description: projectDesc },
+            },
           };
         }
-        return tool;
+
+        return Object.keys(patches).length > 0 ? { ...tool, ...patches } : tool;
       });
     } catch {
       return tools;

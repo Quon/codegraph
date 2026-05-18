@@ -3650,6 +3650,18 @@ function scanForProjects(root, maxDepth = 3) {
   }
   return [...new Set(results)].sort();
 }
+function findNearestMonorepoRoot(startPath) {
+  let current = path2.resolve(startPath);
+  const fsRoot = path2.parse(current).root;
+  while (current !== fsRoot) {
+    if (loadProjects(current).length > 0) return current;
+    const parent = path2.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  if (loadProjects(current).length > 0) return current;
+  return null;
+}
 function syncProjects(root, maxDepth) {
   const existing = loadProjects(root);
   const discovered = scanForProjects(root, maxDepth);
@@ -3707,14 +3719,14 @@ function createShimmerProgress() {
       });
     },
     stop() {
-      return new Promise((resolve9) => {
+      return new Promise((resolve10) => {
         const timeout = setTimeout(() => {
-          worker.terminate().then(() => resolve9());
+          worker.terminate().then(() => resolve10());
         }, 2e3);
         worker.on("message", (msg) => {
           if (msg.type === "stopped") {
             clearTimeout(timeout);
-            worker.terminate().then(() => resolve9());
+            worker.terminate().then(() => resolve10());
           }
         });
         worker.postMessage({ type: "stop" });
@@ -4332,8 +4344,8 @@ var init_utils = __esm({
        */
       async acquire() {
         while (this.locked) {
-          await new Promise((resolve9) => {
-            this.waitQueue.push(resolve9);
+          await new Promise((resolve10) => {
+            this.waitQueue.push(resolve10);
           });
         }
         this.locked = true;
@@ -7000,7 +7012,7 @@ var require_parse = __commonJS({
       }
       return { risky: false };
     };
-    var parse3 = (input, options) => {
+    var parse4 = (input, options) => {
       if (typeof input !== "string") {
         throw new TypeError("Expected a string");
       }
@@ -7170,7 +7182,7 @@ var require_parse = __commonJS({
             output = token.close = `)$))${extglobStar}`;
           }
           if (token.inner.includes("*") && (rest = remaining()) && /^\.[^\\/.]+$/.test(rest)) {
-            const expression = parse3(rest, { ...options, fastpaths: false }).output;
+            const expression = parse4(rest, { ...options, fastpaths: false }).output;
             output = token.close = `)${expression})${extglobStar})`;
           }
           if (token.prev.type === "bos") {
@@ -7692,7 +7704,7 @@ var require_parse = __commonJS({
       }
       return state;
     };
-    parse3.fastpaths = (input, options) => {
+    parse4.fastpaths = (input, options) => {
       const opts = { ...options };
       const max = typeof opts.maxLength === "number" ? Math.min(MAX_LENGTH, opts.maxLength) : MAX_LENGTH;
       const len = input.length;
@@ -7757,7 +7769,7 @@ var require_parse = __commonJS({
       }
       return source;
     };
-    module2.exports = parse3;
+    module2.exports = parse4;
   }
 });
 
@@ -7766,7 +7778,7 @@ var require_picomatch = __commonJS({
   "node_modules/picomatch/lib/picomatch.js"(exports2, module2) {
     "use strict";
     var scan = require_scan();
-    var parse3 = require_parse();
+    var parse4 = require_parse();
     var utils = require_utils();
     var constants = require_constants();
     var isObject = (val) => val && typeof val === "object" && !Array.isArray(val);
@@ -7854,7 +7866,7 @@ var require_picomatch = __commonJS({
     picomatch3.isMatch = (str, patterns, options) => picomatch3(patterns, options)(str);
     picomatch3.parse = (pattern, options) => {
       if (Array.isArray(pattern)) return pattern.map((p) => picomatch3.parse(p, options));
-      return parse3(pattern, { ...options, fastpaths: false });
+      return parse4(pattern, { ...options, fastpaths: false });
     };
     picomatch3.scan = (input, options) => scan(input, options);
     picomatch3.compileRe = (state, options, returnOutput = false, returnState = false) => {
@@ -7880,10 +7892,10 @@ var require_picomatch = __commonJS({
       }
       let parsed = { negated: false, fastpaths: true };
       if (options.fastpaths !== false && (input[0] === "." || input[0] === "*")) {
-        parsed.output = parse3.fastpaths(input, options);
+        parsed.output = parse4.fastpaths(input, options);
       }
       if (!parsed.output) {
-        parsed = parse3(input, options);
+        parsed = parse4(input, options);
       }
       return picomatch3.compileRe(parsed, options, returnOutput, returnState);
     };
@@ -16111,7 +16123,7 @@ var init_extraction = __esm({
           current: 0,
           total
         });
-        await new Promise((resolve9) => setImmediate(resolve9));
+        await new Promise((resolve10) => setImmediate(resolve10));
         const neededLanguages = [...new Set(files.map((f) => detectLanguage(f)))];
         if (neededLanguages.includes("c") && !neededLanguages.includes("cpp")) {
           neededLanguages.push("cpp");
@@ -16167,9 +16179,9 @@ var init_extraction = __esm({
           log("Spawning new parse worker...");
           parseWorker = new WorkerClass(parseWorkerPath);
           attachWorkerHandlers(parseWorker);
-          await new Promise((resolve9, reject) => {
+          await new Promise((resolve10, reject) => {
             parseWorker.once("message", (msg) => {
-              if (msg.type === "grammars-loaded") resolve9();
+              if (msg.type === "grammars-loaded") resolve10();
               else reject(new Error(`Unexpected message: ${msg.type}`));
             });
             parseWorker.postMessage({ type: "load-grammars", languages: neededLanguages });
@@ -16204,7 +16216,7 @@ var init_extraction = __esm({
           const id = nextId++;
           workerParseCount++;
           const timeoutMs = PARSE_TIMEOUT_MS + Math.floor(content.length / 1e5) * 1e4;
-          return new Promise((resolve9, reject) => {
+          return new Promise((resolve10, reject) => {
             const timer = setTimeout(() => {
               pendingParses.delete(id);
               log(`TIMEOUT: ${filePath} exceeded ${timeoutMs}ms \u2014 killing worker`);
@@ -16214,7 +16226,7 @@ var init_extraction = __esm({
               worker.terminate().catch(() => {
               });
             }, timeoutMs);
-            pendingParses.set(id, { resolve: resolve9, reject, timer });
+            pendingParses.set(id, { resolve: resolve10, reject, timer });
             worker.postMessage({ type: "parse", id, filePath, content, frameworkNames });
           });
         }
@@ -16335,7 +16347,7 @@ var init_extraction = __esm({
           current: total,
           total
         });
-        await new Promise((resolve9) => setImmediate(resolve9));
+        await new Promise((resolve10) => setImmediate(resolve10));
         const retryableErrors = errors.filter(
           (e) => e.code === "parse_error" && e.filePath && (e.message.includes("Worker exited") || e.message.includes("memory access out of bounds"))
         );
@@ -18459,7 +18471,7 @@ var init_resolution = __esm({
           }
           processed += batch.length;
           onProgress?.(processed, total);
-          await new Promise((resolve9) => setImmediate(resolve9));
+          await new Promise((resolve10) => setImmediate(resolve10));
           if (result.resolved.length === 0 && result.unresolved.length === batch.length) {
             break;
           }
@@ -20922,7 +20934,7 @@ var init_tools = __esm({
       },
       {
         name: "codegraph_projects",
-        description: "List registered sub-projects with initialization status.",
+        description: "List registered sub-projects with initialization status. In a monorepo, call this first to discover available sub-project names, then pass the name as the `project` parameter to any other tool.",
         inputSchema: {
           type: "object",
           properties: {
@@ -21058,14 +21070,23 @@ var init_tools = __esm({
         try {
           const stats = this.cg.getStats();
           const budget = getExploreBudget(stats.fileCount);
+          const registeredProjects = this.projectRoot ? loadProjects(this.projectRoot) : [];
+          const projectDesc = registeredProjects.length > 0 ? `Registered sub-project name or "*" for all projects. Uses root project if omitted. Available: ${registeredProjects.map((p) => `"${p}"`).join(", ")}.` : projectProperty.description;
           return tools.map((tool) => {
+            const patches = {};
             if (tool.name === "codegraph_explore") {
-              return {
-                ...tool,
-                description: `${tool.description} Budget: make at most ${budget} calls for this project (${stats.fileCount.toLocaleString()} files indexed).`
+              patches.description = `${tool.description} Budget: make at most ${budget} calls for this project (${stats.fileCount.toLocaleString()} files indexed).`;
+            }
+            if (registeredProjects.length > 0 && tool.inputSchema.properties?.project) {
+              patches.inputSchema = {
+                ...tool.inputSchema,
+                properties: {
+                  ...tool.inputSchema.properties,
+                  project: { ...tool.inputSchema.properties.project, description: projectDesc }
+                }
               };
             }
-            return tool;
+            return Object.keys(patches).length > 0 ? { ...tool, ...patches } : tool;
           });
         } catch {
           return tools;
@@ -22266,7 +22287,14 @@ var init_mcp = __esm({
       async tryInitializeDefault(projectPath) {
         const resolvedRoot = findNearestCodeGraphRoot(projectPath);
         if (!resolvedRoot) {
-          this.projectPath = projectPath;
+          const monorepoRoot = findNearestMonorepoRoot(projectPath);
+          if (monorepoRoot) {
+            this.projectPath = monorepoRoot;
+            this.toolHandler.setProjectRoot(monorepoRoot);
+            await this.loadSubProjects(monorepoRoot);
+          } else {
+            this.projectPath = projectPath;
+          }
           return;
         }
         this.projectPath = resolvedRoot;
@@ -22274,29 +22302,34 @@ var init_mcp = __esm({
           this.cg = await src_default.open(resolvedRoot);
           this.toolHandler.setDefaultCodeGraph(this.cg);
           this.toolHandler.setProjectRoot(resolvedRoot);
-          const projects = loadProjects(resolvedRoot);
-          if (projects.length > 0 && projects.length <= 20) {
-            for (const name of projects) {
-              const absPath = path15.resolve(resolvedRoot, name);
-              if (isInitialized(absPath)) {
-                try {
-                  const subCg = src_default.openSync(absPath);
-                  this.toolHandler.addToCache(absPath, subCg);
-                  this.toolHandler.startWatcherFor(name, absPath, subCg);
-                } catch (err) {
-                  process.stderr.write(
-                    `[CodeGraph MCP] Failed to open sub-project "${name}": ${err}
-`
-                  );
-                }
-              }
-            }
-          }
+          await this.loadSubProjects(resolvedRoot);
           this.startWatching();
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           process.stderr.write(`[CodeGraph MCP] Failed to open project at ${resolvedRoot}: ${msg}
 `);
+        }
+      }
+      /**
+       * Eagerly open and cache all registered sub-projects (up to 20).
+       */
+      async loadSubProjects(projectRoot) {
+        const projects = loadProjects(projectRoot);
+        if (projects.length === 0 || projects.length > 20) return;
+        for (const name of projects) {
+          const absPath = path15.resolve(projectRoot, name);
+          if (isInitialized(absPath)) {
+            try {
+              const subCg = src_default.openSync(absPath);
+              this.toolHandler.addToCache(absPath, subCg);
+              this.toolHandler.startWatcherFor(name, absPath, subCg);
+            } catch (err) {
+              process.stderr.write(
+                `[CodeGraph MCP] Failed to open sub-project "${name}": ${err}
+`
+              );
+            }
+          }
         }
       }
       /**
@@ -22309,7 +22342,16 @@ var init_mcp = __esm({
         if (this.toolHandler.hasDefaultCodeGraph()) return;
         if (!this.projectPath) return;
         const resolvedRoot = findNearestCodeGraphRoot(this.projectPath);
-        if (!resolvedRoot) return;
+        if (!resolvedRoot) {
+          const monorepoRoot = findNearestMonorepoRoot(this.projectPath);
+          if (monorepoRoot && monorepoRoot !== this.projectPath) {
+            this.projectPath = monorepoRoot;
+            this.toolHandler.setProjectRoot(monorepoRoot);
+            this.loadSubProjects(monorepoRoot).catch(() => {
+            });
+          }
+          return;
+        }
         try {
           if (this.cg) {
             try {
@@ -22492,6 +22534,7 @@ __export(src_exports, {
   defaultLogger: () => defaultLogger,
   detectLanguage: () => detectLanguage,
   findNearestCodeGraphRoot: () => findNearestCodeGraphRoot,
+  findNearestMonorepoRoot: () => findNearestMonorepoRoot,
   getCodeGraphDir: () => getCodeGraphDir,
   getConfigPath: () => getConfigPath,
   getDatabasePath: () => getDatabasePath,
@@ -23936,10 +23979,10 @@ function main() {
       if (!options.force) {
         const readline2 = await import("readline");
         const rl = readline2.createInterface({ input: process.stdin, output: process.stdout });
-        const answer = await new Promise((resolve9) => {
+        const answer = await new Promise((resolve10) => {
           rl.question(
             chalk.yellow("\u26A0 This will permanently delete all CodeGraph data. Continue? (y/N) "),
-            resolve9
+            resolve10
           );
         });
         rl.close();

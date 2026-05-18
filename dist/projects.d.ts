@@ -35,6 +35,11 @@ export declare function removeProject(projectRoot: string, projectPath: string):
  */
 export declare function scanForProjects(root: string, maxDepth?: number): string[];
 /**
+ * Walk up from startPath looking for the nearest directory that has a
+ * non-empty .codegraph/projects.json (a monorepo root without a root db).
+ */
+export declare function findNearestMonorepoRoot(startPath: string): string | null;
+/**
  * Sync the registry with auto-discovery.
  * Merges scan results with existing entries (keeps manually added projects).
  * Returns the merged and saved project list.
