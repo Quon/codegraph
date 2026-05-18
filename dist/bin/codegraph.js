@@ -3942,14 +3942,44 @@ var init_migrations = __esm({
         description: "Add project metadata, provenance tracking, and unresolved ref context",
         up: (db) => {
           db.exec(`
+        CREATE TABLE IF NOT EXISTS unresolved_refs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          from_node_id TEXT NOT NULL,
+          reference_name TEXT NOT NULL,
+          reference_kind TEXT NOT NULL,
+          line INTEGER NOT NULL,
+          col INTEGER NOT NULL,
+          candidates TEXT,
+          FOREIGN KEY (from_node_id) REFERENCES nodes(id) ON DELETE CASCADE
+        );
         CREATE TABLE IF NOT EXISTS project_metadata (
           key TEXT PRIMARY KEY,
           value TEXT NOT NULL,
           updated_at INTEGER NOT NULL
         );
-        ALTER TABLE unresolved_refs ADD COLUMN file_path TEXT NOT NULL DEFAULT '';
-        ALTER TABLE unresolved_refs ADD COLUMN language TEXT NOT NULL DEFAULT 'unknown';
-        ALTER TABLE edges ADD COLUMN provenance TEXT DEFAULT NULL;
+      `);
+          const unresCols = new Set(
+            db.prepare("PRAGMA table_info(unresolved_refs)").all().map(
+              (c) => c.name
+            )
+          );
+          if (!unresCols.has("file_path")) {
+            db.exec(`ALTER TABLE unresolved_refs ADD COLUMN file_path TEXT NOT NULL DEFAULT '';`);
+          }
+          if (!unresCols.has("language")) {
+            db.exec(
+              `ALTER TABLE unresolved_refs ADD COLUMN language TEXT NOT NULL DEFAULT 'unknown';`
+            );
+          }
+          const edgeCols = new Set(
+            db.prepare("PRAGMA table_info(edges)").all().map(
+              (c) => c.name
+            )
+          );
+          if (!edgeCols.has("provenance")) {
+            db.exec(`ALTER TABLE edges ADD COLUMN provenance TEXT DEFAULT NULL;`);
+          }
+          db.exec(`
         CREATE INDEX IF NOT EXISTS idx_unresolved_file_path ON unresolved_refs(file_path);
         CREATE INDEX IF NOT EXISTS idx_edges_provenance ON edges(provenance);
       `);
@@ -20670,7 +20700,7 @@ var import_crypto, import_fs, import_os, import_path, MAX_OUTPUT_LENGTH, project
 var init_tools = __esm({
   "src/mcp/tools.ts"() {
     "use strict";
-    init_index();
+    init_src();
     import_crypto = require("crypto");
     import_fs = require("fs");
     init_utils();
@@ -20963,7 +20993,7 @@ var init_tools = __esm({
               continue;
             }
             try {
-              const subCg2 = index_default.openSync(absPath2);
+              const subCg2 = src_default.openSync(absPath2);
               this.projectCache.set(absPath2, subCg2);
               this.startWatcherFor(name, absPath2, subCg2);
               map.set(name, subCg2);
@@ -20980,7 +21010,7 @@ var init_tools = __esm({
         }
         const cached = this.projectCache.get(absPath);
         if (cached) return /* @__PURE__ */ new Map([[project, cached]]);
-        const subCg = index_default.openSync(absPath);
+        const subCg = src_default.openSync(absPath);
         this.projectCache.set(absPath, subCg);
         this.startWatcherFor(project, absPath, subCg);
         return /* @__PURE__ */ new Map([[project, subCg]]);
@@ -21073,7 +21103,7 @@ var init_tools = __esm({
           this.projectCache.set(projectPath, cg2);
           return cg2;
         }
-        const cg = index_default.openSync(resolvedRoot);
+        const cg = src_default.openSync(resolvedRoot);
         this.projectCache.set(resolvedRoot, cg);
         if (projectPath !== resolvedRoot) {
           this.projectCache.set(projectPath, cg);
@@ -21951,7 +21981,7 @@ ${output}`);
           const entry = { name, path: absPath, initialized: isInitialized(absPath) };
           if (checkStatus && entry.initialized) {
             try {
-              const subCg = index_default.openSync(absPath);
+              const subCg = src_default.openSync(absPath);
               const stats = subCg.getStats();
               entry.symbolCount = stats.nodeCount;
               entry.fileCount = stats.fileCount;
@@ -22189,7 +22219,7 @@ var init_mcp = __esm({
   "src/mcp/index.ts"() {
     "use strict";
     path15 = __toESM(require("path"));
-    init_index();
+    init_src();
     init_transport();
     init_tools();
     init_server_instructions();
@@ -22241,7 +22271,7 @@ var init_mcp = __esm({
         }
         this.projectPath = resolvedRoot;
         try {
-          this.cg = await index_default.open(resolvedRoot);
+          this.cg = await src_default.open(resolvedRoot);
           this.toolHandler.setDefaultCodeGraph(this.cg);
           this.toolHandler.setProjectRoot(resolvedRoot);
           const projects = loadProjects(resolvedRoot);
@@ -22250,7 +22280,7 @@ var init_mcp = __esm({
               const absPath = path15.resolve(resolvedRoot, name);
               if (isInitialized(absPath)) {
                 try {
-                  const subCg = index_default.openSync(absPath);
+                  const subCg = src_default.openSync(absPath);
                   this.toolHandler.addToCache(absPath, subCg);
                   this.toolHandler.startWatcherFor(name, absPath, subCg);
                 } catch (err) {
@@ -22288,7 +22318,7 @@ var init_mcp = __esm({
             }
             this.cg = null;
           }
-          this.cg = index_default.openSync(resolvedRoot);
+          this.cg = src_default.openSync(resolvedRoot);
           this.projectPath = resolvedRoot;
           this.toolHandler.setDefaultCodeGraph(this.cg);
           this.toolHandler.setProjectRoot(resolvedRoot);
@@ -22436,8 +22466,8 @@ var init_mcp = __esm({
 });
 
 // src/index.ts
-var index_exports = {};
-__export(index_exports, {
+var src_exports = {};
+__export(src_exports, {
   CODEGRAPH_DIR: () => CODEGRAPH_DIR,
   CodeGraph: () => CodeGraph,
   CodeGraphError: () => CodeGraphError,
@@ -22458,7 +22488,7 @@ __export(index_exports, {
   VectorError: () => VectorError,
   addProject: () => addProject,
   debounce: () => debounce,
-  default: () => index_default,
+  default: () => src_default,
   defaultLogger: () => defaultLogger,
   detectLanguage: () => detectLanguage,
   findNearestCodeGraphRoot: () => findNearestCodeGraphRoot,
@@ -22484,8 +22514,8 @@ __export(index_exports, {
   syncProjects: () => syncProjects,
   throttle: () => throttle
 });
-var path16, CodeGraph, index_default;
-var init_index = __esm({
+var path16, CodeGraph, src_default;
+var init_src = __esm({
   "src/index.ts"() {
     "use strict";
     path16 = __toESM(require("path"));
@@ -23210,7 +23240,7 @@ var init_index = __esm({
         removeDirectory(this.projectRoot);
       }
     };
-    index_default = CodeGraph;
+    src_default = CodeGraph;
   }
 });
 
@@ -23546,7 +23576,7 @@ async function initializeLocalProject(clack) {
   const projectPath = process.cwd();
   let CodeGraph2;
   try {
-    CodeGraph2 = (await Promise.resolve().then(() => (init_index(), index_exports))).default;
+    CodeGraph2 = (await Promise.resolve().then(() => (init_src(), src_exports))).default;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     clack.log.error(`Could not load native modules: ${msg}`);
@@ -23636,7 +23666,7 @@ function buildNodeBlockBanner(nodeVersion2) {
 // src/bin/codegraph.ts
 async function loadCodeGraph() {
   try {
-    return await Promise.resolve().then(() => (init_index(), index_exports));
+    return await Promise.resolve().then(() => (init_src(), src_exports));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error("\x1B[31m\u2717\x1B[0m Failed to load CodeGraph modules.");

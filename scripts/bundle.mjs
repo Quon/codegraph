@@ -14,9 +14,11 @@ await Promise.all([
   build({
     ...common,
     entryPoints: [
-      'src/bin/codegraph.ts',
-      'src/bin/node-version-check.ts',
-      'src/bin/uninstall.ts',
+      { in: 'src/bin/codegraph.ts',            out: 'codegraph' },
+      { in: 'src/bin/node-version-check.ts',   out: 'node-version-check' },
+      { in: 'src/bin/uninstall.ts',            out: 'uninstall' },
+      { in: 'src/ui/shimmer-worker.ts',        out: 'shimmer-worker' },
+      { in: 'src/extraction/parse-worker.ts',  out: 'parse-worker' },
     ],
     outdir: 'dist/bin',
   }),
@@ -24,5 +26,11 @@ await Promise.all([
     ...common,
     entryPoints: ['src/index.ts'],
     outfile: 'dist/index.js',
+  }),
+  // parse-worker must also live alongside dist/index.js for library consumers
+  build({
+    ...common,
+    entryPoints: ['src/extraction/parse-worker.ts'],
+    outfile: 'dist/parse-worker.js',
   }),
 ]);

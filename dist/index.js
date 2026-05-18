@@ -2005,14 +2005,44 @@ var migrations = [
     description: "Add project metadata, provenance tracking, and unresolved ref context",
     up: (db) => {
       db.exec(`
+        CREATE TABLE IF NOT EXISTS unresolved_refs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          from_node_id TEXT NOT NULL,
+          reference_name TEXT NOT NULL,
+          reference_kind TEXT NOT NULL,
+          line INTEGER NOT NULL,
+          col INTEGER NOT NULL,
+          candidates TEXT,
+          FOREIGN KEY (from_node_id) REFERENCES nodes(id) ON DELETE CASCADE
+        );
         CREATE TABLE IF NOT EXISTS project_metadata (
           key TEXT PRIMARY KEY,
           value TEXT NOT NULL,
           updated_at INTEGER NOT NULL
         );
-        ALTER TABLE unresolved_refs ADD COLUMN file_path TEXT NOT NULL DEFAULT '';
-        ALTER TABLE unresolved_refs ADD COLUMN language TEXT NOT NULL DEFAULT 'unknown';
-        ALTER TABLE edges ADD COLUMN provenance TEXT DEFAULT NULL;
+      `);
+      const unresCols = new Set(
+        db.prepare("PRAGMA table_info(unresolved_refs)").all().map(
+          (c) => c.name
+        )
+      );
+      if (!unresCols.has("file_path")) {
+        db.exec(`ALTER TABLE unresolved_refs ADD COLUMN file_path TEXT NOT NULL DEFAULT '';`);
+      }
+      if (!unresCols.has("language")) {
+        db.exec(
+          `ALTER TABLE unresolved_refs ADD COLUMN language TEXT NOT NULL DEFAULT 'unknown';`
+        );
+      }
+      const edgeCols = new Set(
+        db.prepare("PRAGMA table_info(edges)").all().map(
+          (c) => c.name
+        )
+      );
+      if (!edgeCols.has("provenance")) {
+        db.exec(`ALTER TABLE edges ADD COLUMN provenance TEXT DEFAULT NULL;`);
+      }
+      db.exec(`
         CREATE INDEX IF NOT EXISTS idx_unresolved_file_path ON unresolved_refs(file_path);
         CREATE INDEX IF NOT EXISTS idx_edges_provenance ON edges(provenance);
       `);
