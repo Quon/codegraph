@@ -77,11 +77,11 @@ export async function runInstaller(): Promise<void> {
           } catch { /* ignore invalid entries */ }
         }
       }
-      execSync('npm install -g github:Quon/codegraph', { stdio: 'pipe' });
+      execSync('npm install -g https://github.com/Quon/codegraph/archive/refs/heads/main.tar.gz', { stdio: 'pipe' });
       s.stop('Installed codegraph globally');
     } catch {
       s.stop('Could not install globally (permission denied)');
-      clack.log.warn('Try: sudo npm install -g github:Quon/codegraph');
+      clack.log.warn('Try: sudo npm install -g https://github.com/Quon/codegraph/archive/refs/heads/main.tar.gz');
     }
   } else {
     clack.log.info('Skipped global install — MCP server uses npx, so it will still work');
