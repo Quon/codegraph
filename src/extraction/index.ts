@@ -632,7 +632,9 @@ export class ExtractionOrchestrator {
     async function ensureWorker(): Promise<import('worker_threads').Worker> {
       if (parseWorker) return parseWorker;
       log('Spawning new parse worker...');
-      parseWorker = new WorkerClass!(parseWorkerPath);
+      parseWorker = new WorkerClass!(parseWorkerPath, {
+        execArgv: ['--no-wasm-tier-up'],
+      });
       attachWorkerHandlers(parseWorker);
       return parseWorker;
     }

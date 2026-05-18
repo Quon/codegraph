@@ -16232,7 +16232,9 @@ var init_extraction = __esm({
         async function ensureWorker() {
           if (parseWorker) return parseWorker;
           log("Spawning new parse worker...");
-          parseWorker = new WorkerClass(parseWorkerPath);
+          parseWorker = new WorkerClass(parseWorkerPath, {
+            execArgv: ["--no-wasm-tier-up"]
+          });
           attachWorkerHandlers(parseWorker);
           return parseWorker;
         }
