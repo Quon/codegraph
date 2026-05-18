@@ -1,11 +1,12 @@
 /**
  * Parse Worker
  *
- * Runs tree-sitter parsing in a separate thread so the main thread
+ * Runs tree-sitter parsing in a child process so the main process
  * stays unblocked and the UI animation renders smoothly.
+ * Spawned via child_process.fork() with --no-wasm-tier-up to prevent
+ * V8 Zone OOM from JIT tier-up of WASM functions.
  */
 
-import { parentPort } from 'worker_threads';
 import { extractFromSource } from './tree-sitter';
 import { detectLanguage, loadGrammarsForLanguages, resetParser } from './grammars';
 import type { Language, ExtractionResult } from '../types';
@@ -60,7 +61,7 @@ const parseCounts = new Map<Language, number>();
 // is reflected in RSS and cannot be freed without destroying the V8 isolate.
 const RECYCLE_RSS_THRESHOLD_MB = 400;
 
-parentPort!.on('message', async (msg: { type: string; id?: number; filePath?: string; content?: string; frameworkNames?: string[] }) => {
+process.on('message', async (msg: { type: string; id?: number; filePath?: string; content?: string; frameworkNames?: string[] }) => {
   if (msg.type === 'parse') {
     const { id, filePath, content, frameworkNames } = msg;
     try {
@@ -85,7 +86,7 @@ parentPort!.on('message', async (msg: { type: string; id?: number; filePath?: st
       const rssMb = process.memoryUsage().rss / 1024 / 1024;
       const shouldRecycle = rssMb > RECYCLE_RSS_THRESHOLD_MB;
 
-      parentPort!.postMessage({ type: 'parse-result', id, result, shouldRecycle });
+      process.send!({ type: 'parse-result', id, result, shouldRecycle });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
 
@@ -96,7 +97,7 @@ parentPort!.on('message', async (msg: { type: string; id?: number; filePath?: st
         process.exit(1);
       }
 
-      parentPort!.postMessage({
+      process.send!({
         type: 'parse-result',
         id,
         result: {
@@ -109,6 +110,6 @@ parentPort!.on('message', async (msg: { type: string; id?: number; filePath?: st
       });
     }
   } else if (msg.type === 'shutdown') {
-    parentPort!.postMessage({ type: 'shutdown-ack' });
+    process.send!({ type: 'shutdown-ack' });
   }
 });

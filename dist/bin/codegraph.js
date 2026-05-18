@@ -16181,12 +16181,8 @@ var init_extraction = __esm({
           neededLanguages.push("cpp");
         }
         const parseWorkerPath = path10.join(__dirname, "parse-worker.js");
-        const useWorker = fs6.existsSync(parseWorkerPath);
-        let WorkerClass = null;
-        if (useWorker) {
-          const { Worker: Worker2 } = await import("worker_threads");
-          WorkerClass = Worker2;
-        } else {
+        const useForkedWorker = fs6.existsSync(parseWorkerPath);
+        if (!useForkedWorker) {
           await loadGrammarsForLanguages(neededLanguages);
         }
         let parseWorker = null;
@@ -16229,17 +16225,17 @@ var init_extraction = __esm({
             }
           });
         }
-        async function ensureWorker() {
+        function ensureWorker() {
           if (parseWorker) return parseWorker;
           log("Spawning new parse worker...");
-          parseWorker = new WorkerClass(parseWorkerPath, {
+          parseWorker = (0, import_child_process.fork)(parseWorkerPath, [], {
             execArgv: ["--no-wasm-tier-up"]
           });
           attachWorkerHandlers(parseWorker);
           return parseWorker;
         }
-        if (WorkerClass) {
-          await ensureWorker();
+        if (useForkedWorker) {
+          ensureWorker();
         }
         function recycleWorker() {
           if (!parseWorker) return;
@@ -16247,11 +16243,13 @@ var init_extraction = __esm({
           const w = parseWorker;
           parseWorker = null;
           workerParseCount = 0;
-          w.terminate().catch(() => {
-          });
+          try {
+            w.kill();
+          } catch {
+          }
         }
         async function requestParse(filePath, content) {
-          if (!WorkerClass) {
+          if (!useForkedWorker) {
             return extractFromSource(
               filePath,
               content,
@@ -16260,9 +16258,9 @@ var init_extraction = __esm({
             );
           }
           if (workerParseCount >= WORKER_RECYCLE_INTERVAL) {
-            await recycleWorker();
+            recycleWorker();
           }
-          const worker = await ensureWorker();
+          const worker = ensureWorker();
           const id = nextId++;
           workerParseCount++;
           const timeoutMs = PARSE_TIMEOUT_MS + Math.floor(content.length / 1e5) * 1e4;
@@ -16273,17 +16271,24 @@ var init_extraction = __esm({
               parseWorker = null;
               workerParseCount = 0;
               reject(new Error(`Parse timed out after ${timeoutMs}ms`));
-              worker.terminate().catch(() => {
-              });
+              try {
+                worker.kill();
+              } catch {
+              }
             }, timeoutMs);
             pendingParses.set(id, { resolve: resolve10, reject, timer });
-            worker.postMessage({ type: "parse", id, filePath, content, frameworkNames });
+            worker.send({ type: "parse", id, filePath, content, frameworkNames });
           });
         }
         for (let i = 0; i < files.length; i += FILE_IO_BATCH_SIZE) {
           if (signal?.aborted) {
-            if (parseWorker) parseWorker.terminate().catch(() => {
-            });
+            if (parseWorker) {
+              const w = parseWorker;
+              try {
+                w.kill();
+              } catch {
+              }
+            }
             return {
               success: false,
               filesIndexed,
@@ -16314,8 +16319,13 @@ var init_extraction = __esm({
           );
           for (const { filePath, content, stats, error } of fileContents) {
             if (signal?.aborted) {
-              if (parseWorker) parseWorker.terminate().catch(() => {
-              });
+              if (parseWorker) {
+                const w = parseWorker;
+                try {
+                  w.kill();
+                } catch {
+                }
+              }
               return {
                 success: false,
                 filesIndexed,
@@ -16401,7 +16411,7 @@ var init_extraction = __esm({
         const retryableErrors = errors.filter(
           (e) => e.code === "parse_error" && e.filePath && (e.message.includes("Worker exited") || e.message.includes("memory access out of bounds"))
         );
-        if (retryableErrors.length > 0 && WorkerClass) {
+        if (retryableErrors.length > 0 && useForkedWorker) {
           log(`Retrying ${retryableErrors.length} files that failed due to WASM memory errors...`);
           const stillFailing = [];
           for (const errEntry of retryableErrors) {
@@ -16474,8 +16484,11 @@ var init_extraction = __esm({
         }
         rejectAllPending("Indexing complete");
         if (parseWorker) {
-          parseWorker.terminate().catch(() => {
-          });
+          const w = parseWorker;
+          try {
+            w.kill();
+          } catch {
+          }
         }
         return {
           success: filesIndexed > 0 || errors.filter((e) => e.severity === "error").length === 0,
