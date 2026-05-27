@@ -67,6 +67,11 @@ export class MCPServer {
   private projectPath: string | null;
   private projectsJsonWatcher: fs.FSWatcher | null = null;
   private projectsReloadTimer: ReturnType<typeof setTimeout> | null = null;
+  // Absolute paths of sub-projects loaded from projects.json — tracked
+  // separately from ToolHandler.projectCache so we know which cached
+  // entries came from the registry (and should be removed when their
+  // path is taken out of projects.json) vs. lazily opened via projectPath.
+  private registeredSubProjects: Set<string> = new Set();
 
   constructor(projectPath?: string) {
     this.projectPath = projectPath || null;
@@ -142,15 +147,32 @@ export class MCPServer {
 
   /**
    * Open and cache any registered sub-projects not already cached.
+   * Closes and unwatches any sub-projects that are no longer in
+   * projects.json (e.g. removed or path renamed).
    * Idempotent — safe to call multiple times when projects.json changes.
    */
   private async loadSubProjects(projectRoot: string): Promise<void> {
     const entries = loadProjectEntries(projectRoot);
-    if (entries.length === 0) return;
+    const newPaths = new Set<string>();
+    for (const e of entries) {
+      newPaths.add(path.resolve(projectRoot, e.path));
+    }
 
+    // Remove sub-projects that disappeared from projects.json
+    let removed = 0;
+    for (const absPath of this.registeredSubProjects) {
+      if (!newPaths.has(absPath)) {
+        this.toolHandler.removeProject(absPath);
+        this.registeredSubProjects.delete(absPath);
+        removed++;
+      }
+    }
+
+    // Open new sub-projects
     let opened = 0;
     for (const entry of entries) {
       const absPath = path.resolve(projectRoot, entry.path);
+      this.registeredSubProjects.add(absPath);
       if (this.toolHandler.hasProject(absPath)) continue;
       if (!isInitialized(absPath)) continue;
 
@@ -166,8 +188,11 @@ export class MCPServer {
       }
     }
 
-    if (opened > 0) {
-      process.stderr.write(`[CodeGraph MCP] Loaded ${opened} sub-project(s)\n`);
+    if (opened > 0 || removed > 0) {
+      const parts: string[] = [];
+      if (opened > 0) parts.push(`loaded ${opened}`);
+      if (removed > 0) parts.push(`removed ${removed}`);
+      process.stderr.write(`[CodeGraph MCP] Sub-projects: ${parts.join(', ')}\n`);
     }
   }
 

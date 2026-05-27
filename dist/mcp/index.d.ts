@@ -27,6 +27,7 @@ export declare class MCPServer {
     private projectPath;
     private projectsJsonWatcher;
     private projectsReloadTimer;
+    private registeredSubProjects;
     constructor(projectPath?: string);
     /**
      * Start the MCP server
@@ -48,6 +49,8 @@ export declare class MCPServer {
     private tryInitializeDefault;
     /**
      * Open and cache any registered sub-projects not already cached.
+     * Closes and unwatches any sub-projects that are no longer in
+     * projects.json (e.g. removed or path renamed).
      * Idempotent — safe to call multiple times when projects.json changes.
      */
     private loadSubProjects;

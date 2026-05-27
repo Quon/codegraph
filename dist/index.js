@@ -17086,6 +17086,20 @@ var ToolHandler = class _ToolHandler {
   projectCache = /* @__PURE__ */ new Map();
   projectRoot = null;
   watchers = /* @__PURE__ */ new Map();
+  // Serialize sub-project syncs across watchers — prevents N watchers from
+  // each spawning a parse worker process simultaneously when multiple
+  // sub-projects see file changes at the same time.
+  syncQueue = Promise.resolve();
+  /**
+   * Run an async sync operation serialized against all other watchers.
+   * Failures don't block the queue — the chain catches and continues.
+   */
+  serializeSync(fn) {
+    const next = this.syncQueue.then(fn);
+    this.syncQueue = next.catch(() => {
+    });
+    return next;
+  }
   /**
    * Update the default CodeGraph instance (e.g. after lazy initialization)
    */
@@ -17116,6 +17130,31 @@ var ToolHandler = class _ToolHandler {
    */
   hasProject(projectPath) {
     return this.projectCache.has(projectPath);
+  }
+  /**
+   * All currently cached project absolute paths.
+   * Used to detect sub-projects removed from projects.json.
+   */
+  getProjectPaths() {
+    return [...this.projectCache.keys()];
+  }
+  /**
+   * Stop watching and close a cached sub-project. No-op if not cached.
+   */
+  removeProject(absPath) {
+    const watcher = this.watchers.get(absPath);
+    if (watcher) {
+      watcher.stop();
+      this.watchers.delete(absPath);
+    }
+    const cg = this.projectCache.get(absPath);
+    if (cg) {
+      try {
+        cg.close();
+      } catch {
+      }
+      this.projectCache.delete(absPath);
+    }
   }
   /**
    * Resolve a project identifier to one or more CodeGraph instances.
@@ -17176,11 +17215,13 @@ var ToolHandler = class _ToolHandler {
     const watcher = new FileWatcher(
       absPath,
       cg.getConfig(),
-      async () => {
+      // Serialize across all sub-project watchers so concurrent file
+      // changes don't spawn N parse worker processes at once.
+      () => this.serializeSync(async () => {
         const result = await cg.sync();
         const filesChanged = result.filesAdded + result.filesModified + result.filesRemoved;
         return { filesChanged, durationMs: result.durationMs };
-      },
+      }),
       {
         onSyncComplete: (result) => {
           if (result.filesChanged > 0) {
@@ -17198,6 +17239,11 @@ var ToolHandler = class _ToolHandler {
     );
     if (watcher.start()) {
       this.watchers.set(absPath, watcher);
+    } else {
+      process.stderr.write(
+        `[CodeGraph MCP] Auto-sync disabled for "${name}" \u2014 recursive fs.watch unsupported on this platform. Run \`codegraph sync\` manually after file changes.
+`
+      );
     }
   }
   /**
@@ -18369,6 +18415,11 @@ var MCPServer = class {
   projectPath;
   projectsJsonWatcher = null;
   projectsReloadTimer = null;
+  // Absolute paths of sub-projects loaded from projects.json — tracked
+  // separately from ToolHandler.projectCache so we know which cached
+  // entries came from the registry (and should be removed when their
+  // path is taken out of projects.json) vs. lazily opened via projectPath.
+  registeredSubProjects = /* @__PURE__ */ new Set();
   constructor(projectPath) {
     this.projectPath = projectPath || null;
     this.transport = new StdioTransport();
@@ -18427,14 +18478,28 @@ var MCPServer = class {
   }
   /**
    * Open and cache any registered sub-projects not already cached.
+   * Closes and unwatches any sub-projects that are no longer in
+   * projects.json (e.g. removed or path renamed).
    * Idempotent — safe to call multiple times when projects.json changes.
    */
   async loadSubProjects(projectRoot) {
     const entries = loadProjectEntries(projectRoot);
-    if (entries.length === 0) return;
+    const newPaths = /* @__PURE__ */ new Set();
+    for (const e of entries) {
+      newPaths.add(path14.resolve(projectRoot, e.path));
+    }
+    let removed = 0;
+    for (const absPath of this.registeredSubProjects) {
+      if (!newPaths.has(absPath)) {
+        this.toolHandler.removeProject(absPath);
+        this.registeredSubProjects.delete(absPath);
+        removed++;
+      }
+    }
     let opened = 0;
     for (const entry of entries) {
       const absPath = path14.resolve(projectRoot, entry.path);
+      this.registeredSubProjects.add(absPath);
       if (this.toolHandler.hasProject(absPath)) continue;
       if (!isInitialized(absPath)) continue;
       try {
@@ -18449,8 +18514,11 @@ var MCPServer = class {
         );
       }
     }
-    if (opened > 0) {
-      process.stderr.write(`[CodeGraph MCP] Loaded ${opened} sub-project(s)
+    if (opened > 0 || removed > 0) {
+      const parts = [];
+      if (opened > 0) parts.push(`loaded ${opened}`);
+      if (removed > 0) parts.push(`removed ${removed}`);
+      process.stderr.write(`[CodeGraph MCP] Sub-projects: ${parts.join(", ")}
 `);
     }
   }

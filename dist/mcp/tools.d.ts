@@ -58,7 +58,13 @@ export declare class ToolHandler {
     private projectCache;
     private projectRoot;
     private watchers;
+    private syncQueue;
     constructor(cg: CodeGraph | null);
+    /**
+     * Run an async sync operation serialized against all other watchers.
+     * Failures don't block the queue — the chain catches and continues.
+     */
+    private serializeSync;
     /**
      * Update the default CodeGraph instance (e.g. after lazy initialization)
      */
@@ -80,6 +86,15 @@ export declare class ToolHandler {
      * Used to make incremental sub-project loading idempotent.
      */
     hasProject(projectPath: string): boolean;
+    /**
+     * All currently cached project absolute paths.
+     * Used to detect sub-projects removed from projects.json.
+     */
+    getProjectPaths(): string[];
+    /**
+     * Stop watching and close a cached sub-project. No-op if not cached.
+     */
+    removeProject(absPath: string): void;
     /**
      * Resolve a project identifier to one or more CodeGraph instances.
      */

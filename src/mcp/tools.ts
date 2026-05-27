@@ -332,7 +332,22 @@ export class ToolHandler {
   private projectRoot: string | null = null;
   private watchers: Map<string, FileWatcher> = new Map();
 
+  // Serialize sub-project syncs across watchers — prevents N watchers from
+  // each spawning a parse worker process simultaneously when multiple
+  // sub-projects see file changes at the same time.
+  private syncQueue: Promise<unknown> = Promise.resolve();
+
   constructor(private cg: CodeGraph | null) {}
+
+  /**
+   * Run an async sync operation serialized against all other watchers.
+   * Failures don't block the queue — the chain catches and continues.
+   */
+  private serializeSync<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.syncQueue.then(fn);
+    this.syncQueue = next.catch(() => {});
+    return next;
+  }
 
   /**
    * Update the default CodeGraph instance (e.g. after lazy initialization)
@@ -368,6 +383,30 @@ export class ToolHandler {
    */
   hasProject(projectPath: string): boolean {
     return this.projectCache.has(projectPath);
+  }
+
+  /**
+   * All currently cached project absolute paths.
+   * Used to detect sub-projects removed from projects.json.
+   */
+  getProjectPaths(): string[] {
+    return [...this.projectCache.keys()];
+  }
+
+  /**
+   * Stop watching and close a cached sub-project. No-op if not cached.
+   */
+  removeProject(absPath: string): void {
+    const watcher = this.watchers.get(absPath);
+    if (watcher) {
+      watcher.stop();
+      this.watchers.delete(absPath);
+    }
+    const cg = this.projectCache.get(absPath);
+    if (cg) {
+      try { cg.close(); } catch { /* already closed */ }
+      this.projectCache.delete(absPath);
+    }
   }
 
   /**
@@ -439,11 +478,13 @@ export class ToolHandler {
     const watcher = new FileWatcher(
       absPath,
       cg.getConfig(),
-      async () => {
+      // Serialize across all sub-project watchers so concurrent file
+      // changes don't spawn N parse worker processes at once.
+      () => this.serializeSync(async () => {
         const result = await cg.sync();
         const filesChanged = result.filesAdded + result.filesModified + result.filesRemoved;
         return { filesChanged, durationMs: result.durationMs };
-      },
+      }),
       {
         onSyncComplete: (result) => {
           if (result.filesChanged > 0) {
@@ -459,6 +500,13 @@ export class ToolHandler {
     );
     if (watcher.start()) {
       this.watchers.set(absPath, watcher);
+    } else {
+      // Recursive fs.watch failed (e.g. Linux < Node 19). Surface this so
+      // users know auto-sync is disabled — otherwise it fails silently.
+      process.stderr.write(
+        `[CodeGraph MCP] Auto-sync disabled for "${name}" — recursive fs.watch unsupported on this platform. ` +
+        `Run \`codegraph sync\` manually after file changes.\n`
+      );
     }
   }
 
