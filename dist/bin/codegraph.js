@@ -1197,7 +1197,7 @@ var require_command = __commonJS({
     var EventEmitter = require("node:events").EventEmitter;
     var childProcess = require("node:child_process");
     var path20 = require("node:path");
-    var fs14 = require("node:fs");
+    var fs15 = require("node:fs");
     var process2 = require("node:process");
     var { Argument: Argument2, humanReadableArgName } = require_argument();
     var { CommanderError: CommanderError2 } = require_error();
@@ -2191,7 +2191,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
        * @param {string} subcommandName
        */
       _checkForMissingExecutable(executableFile, executableDir, subcommandName) {
-        if (fs14.existsSync(executableFile)) return;
+        if (fs15.existsSync(executableFile)) return;
         const executableDirMessage = executableDir ? `searched for local subcommand relative to directory '${executableDir}'` : "no directory for search for local subcommand, use .executableDir() to supply a custom directory";
         const executableMissing = `'${executableFile}' does not exist
  - if '${subcommandName}' is not meant to be an executable command, remove description parameter from '.command()' and use '.description()' instead
@@ -2210,10 +2210,10 @@ Expecting one of '${allowedValues.join("', '")}'`);
         const sourceExt = [".js", ".ts", ".tsx", ".mjs", ".cjs"];
         function findFile(baseDir, baseName) {
           const localBin = path20.resolve(baseDir, baseName);
-          if (fs14.existsSync(localBin)) return localBin;
+          if (fs15.existsSync(localBin)) return localBin;
           if (sourceExt.includes(path20.extname(baseName))) return void 0;
           const foundExt = sourceExt.find(
-            (ext) => fs14.existsSync(`${localBin}${ext}`)
+            (ext) => fs15.existsSync(`${localBin}${ext}`)
           );
           if (foundExt) return `${localBin}${foundExt}`;
           return void 0;
@@ -2225,7 +2225,7 @@ Expecting one of '${allowedValues.join("', '")}'`);
         if (this._scriptPath) {
           let resolvedScriptPath;
           try {
-            resolvedScriptPath = fs14.realpathSync(this._scriptPath);
+            resolvedScriptPath = fs15.realpathSync(this._scriptPath);
           } catch {
             resolvedScriptPath = this._scriptPath;
           }
@@ -21044,6 +21044,13 @@ var init_tools = __esm({
         this.projectCache.set(projectPath, cg);
       }
       /**
+       * Whether a project at the given absolute path is already cached.
+       * Used to make incremental sub-project loading idempotent.
+       */
+      hasProject(projectPath) {
+        return this.projectCache.has(projectPath);
+      }
+      /**
        * Resolve a project identifier to one or more CodeGraph instances.
        */
       resolveProjects(project, projectPath) {
@@ -22298,10 +22305,11 @@ function fileUriToPath(uri) {
     return uri.replace(/^file:\/\/\/?/, "");
   }
 }
-var path15, SERVER_INFO, PROTOCOL_VERSION, MCPServer;
+var fs11, path15, SERVER_INFO, PROTOCOL_VERSION, MCPServer;
 var init_mcp = __esm({
   "src/mcp/index.ts"() {
     "use strict";
+    fs11 = __toESM(require("fs"));
     path15 = __toESM(require("path"));
     init_src();
     init_transport();
@@ -22319,6 +22327,8 @@ var init_mcp = __esm({
       cg = null;
       toolHandler;
       projectPath;
+      projectsJsonWatcher = null;
+      projectsReloadTimer = null;
       constructor(projectPath) {
         this.projectPath = projectPath || null;
         this.transport = new StdioTransport();
@@ -22355,6 +22365,7 @@ var init_mcp = __esm({
             this.projectPath = monorepoRoot;
             this.toolHandler.setProjectRoot(monorepoRoot);
             await this.loadSubProjects(monorepoRoot);
+            this.watchProjectsJson(monorepoRoot);
           } else {
             this.projectPath = projectPath;
           }
@@ -22366,6 +22377,7 @@ var init_mcp = __esm({
           this.toolHandler.setDefaultCodeGraph(this.cg);
           this.toolHandler.setProjectRoot(resolvedRoot);
           await this.loadSubProjects(resolvedRoot);
+          this.watchProjectsJson(resolvedRoot);
           this.startWatching();
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -22374,25 +22386,69 @@ var init_mcp = __esm({
         }
       }
       /**
-       * Eagerly open and cache all registered sub-projects (up to 20).
+       * Open and cache any registered sub-projects not already cached.
+       * Idempotent — safe to call multiple times when projects.json changes.
        */
       async loadSubProjects(projectRoot) {
         const entries = loadProjectEntries(projectRoot);
-        if (entries.length === 0 || entries.length > 20) return;
+        if (entries.length === 0) return;
+        let opened = 0;
         for (const entry of entries) {
           const absPath = path15.resolve(projectRoot, entry.path);
-          if (isInitialized(absPath)) {
-            try {
-              const subCg = src_default.openSync(absPath);
-              this.toolHandler.addToCache(absPath, subCg);
-              this.toolHandler.startWatcherFor(entry.name, absPath, subCg);
-            } catch (err) {
-              process.stderr.write(
-                `[CodeGraph MCP] Failed to open sub-project "${entry.name}": ${err}
+          if (this.toolHandler.hasProject(absPath)) continue;
+          if (!isInitialized(absPath)) continue;
+          try {
+            const subCg = src_default.openSync(absPath);
+            this.toolHandler.addToCache(absPath, subCg);
+            this.toolHandler.startWatcherFor(entry.name, absPath, subCg);
+            opened++;
+          } catch (err) {
+            process.stderr.write(
+              `[CodeGraph MCP] Failed to open sub-project "${entry.name}": ${err}
 `
-              );
-            }
+            );
           }
+        }
+        if (opened > 0) {
+          process.stderr.write(`[CodeGraph MCP] Loaded ${opened} sub-project(s)
+`);
+        }
+      }
+      /**
+       * Watch the monorepo's projects.json so sub-projects added during the
+       * MCP session (e.g. via `codegraph project add`) are picked up without a
+       * server restart.
+       *
+       * We watch the parent .codegraph/ directory rather than the file itself
+       * because saveProjects() does an atomic temp-file + rename, which breaks
+       * single-file watchers on Windows. Reload is debounced 500ms to coalesce
+       * the tmp-create + rename event pair.
+       */
+      watchProjectsJson(projectRoot) {
+        if (this.projectsJsonWatcher) return;
+        const cgDir = path15.join(projectRoot, ".codegraph");
+        if (!fs11.existsSync(cgDir)) return;
+        try {
+          this.projectsJsonWatcher = fs11.watch(cgDir, (_eventType, filename) => {
+            if (filename !== "projects.json" && filename !== "projects.json.tmp") return;
+            if (this.projectsReloadTimer) clearTimeout(this.projectsReloadTimer);
+            this.projectsReloadTimer = setTimeout(() => {
+              this.projectsReloadTimer = null;
+              this.loadSubProjects(projectRoot).catch((err) => {
+                process.stderr.write(
+                  `[CodeGraph MCP] Failed to reload sub-projects after projects.json change: ${err}
+`
+                );
+              });
+            }, 500);
+          });
+          this.projectsJsonWatcher.on("error", (err) => {
+            process.stderr.write(`[CodeGraph MCP] projects.json watcher error: ${err}
+`);
+          });
+        } catch (err) {
+          process.stderr.write(`[CodeGraph MCP] Could not watch projects.json: ${err}
+`);
         }
       }
       /**
@@ -22412,6 +22468,7 @@ var init_mcp = __esm({
             this.toolHandler.setProjectRoot(monorepoRoot);
             this.loadSubProjects(monorepoRoot).catch(() => {
             });
+            this.watchProjectsJson(monorepoRoot);
           }
           return;
         }
@@ -22459,6 +22516,14 @@ var init_mcp = __esm({
        * Stop the server
        */
       stop() {
+        if (this.projectsReloadTimer) {
+          clearTimeout(this.projectsReloadTimer);
+          this.projectsReloadTimer = null;
+        }
+        if (this.projectsJsonWatcher) {
+          this.projectsJsonWatcher.close();
+          this.projectsJsonWatcher = null;
+        }
         this.toolHandler.closeAll();
         if (this.cg) {
           this.cg.close();
@@ -23413,11 +23478,11 @@ function getSettingsJsonPath(location) {
   return path17.join(configDir, "settings.json");
 }
 function readJsonFile(filePath) {
-  if (!fs11.existsSync(filePath)) {
+  if (!fs12.existsSync(filePath)) {
     return {};
   }
   try {
-    const content = fs11.readFileSync(filePath, "utf-8");
+    const content = fs12.readFileSync(filePath, "utf-8");
     return JSON.parse(content);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -23425,7 +23490,7 @@ function readJsonFile(filePath) {
     console.warn(`  A backup will be created before overwriting.`);
     try {
       const backupPath = filePath + ".backup";
-      fs11.copyFileSync(filePath, backupPath);
+      fs12.copyFileSync(filePath, backupPath);
     } catch {
     }
     return {};
@@ -23433,16 +23498,16 @@ function readJsonFile(filePath) {
 }
 function atomicWriteFileSync(filePath, content) {
   const dir = path17.dirname(filePath);
-  if (!fs11.existsSync(dir)) {
-    fs11.mkdirSync(dir, { recursive: true });
+  if (!fs12.existsSync(dir)) {
+    fs12.mkdirSync(dir, { recursive: true });
   }
   const tmpPath = filePath + ".tmp." + process.pid;
   try {
-    fs11.writeFileSync(tmpPath, content);
-    fs11.renameSync(tmpPath, filePath);
+    fs12.writeFileSync(tmpPath, content);
+    fs12.renameSync(tmpPath, filePath);
   } catch (err) {
     try {
-      fs11.unlinkSync(tmpPath);
+      fs12.unlinkSync(tmpPath);
     } catch {
     }
     throw err;
@@ -23522,14 +23587,14 @@ function getClaudeMdPath(location) {
 function writeClaudeMd(location) {
   const claudeMdPath = getClaudeMdPath(location);
   const configDir = getClaudeConfigDir(location);
-  if (!fs11.existsSync(configDir)) {
-    fs11.mkdirSync(configDir, { recursive: true });
+  if (!fs12.existsSync(configDir)) {
+    fs12.mkdirSync(configDir, { recursive: true });
   }
-  if (!fs11.existsSync(claudeMdPath)) {
+  if (!fs12.existsSync(claudeMdPath)) {
     atomicWriteFileSync(claudeMdPath, CLAUDE_MD_TEMPLATE + "\n");
     return { created: true, updated: false };
   }
-  let content = fs11.readFileSync(claudeMdPath, "utf-8");
+  let content = fs12.readFileSync(claudeMdPath, "utf-8");
   if (content.includes(CODEGRAPH_SECTION_START)) {
     const startIdx = content.indexOf(CODEGRAPH_SECTION_START);
     const endIdx = content.indexOf(CODEGRAPH_SECTION_END);
@@ -23563,11 +23628,11 @@ function writeClaudeMd(location) {
   atomicWriteFileSync(claudeMdPath, content);
   return { created: false, updated: false };
 }
-var fs11, path17, os;
+var fs12, path17, os;
 var init_config_writer = __esm({
   "src/installer/config-writer.ts"() {
     "use strict";
-    fs11 = __toESM(require("fs"));
+    fs12 = __toESM(require("fs"));
     path17 = __toESM(require("path"));
     os = __toESM(require("os"));
     init_claude_md_template();
@@ -23585,7 +23650,7 @@ function formatNumber(n) {
 function getVersion() {
   try {
     const packageJsonPath = path18.join(__dirname, "..", "..", "package.json");
-    const packageJson = JSON.parse(fs12.readFileSync(packageJsonPath, "utf-8"));
+    const packageJson = JSON.parse(fs13.readFileSync(packageJsonPath, "utf-8"));
     return packageJson.version;
   } catch {
     return "0.0.0";
@@ -23607,13 +23672,13 @@ async function runInstaller() {
     s.start("Installing codegraph globally...");
     try {
       const cacacheTmp = path18.join(os2.homedir(), ".npm", "_cacache", "tmp");
-      if (fs12.existsSync(cacacheTmp)) {
-        for (const entry of fs12.readdirSync(cacacheTmp)) {
+      if (fs13.existsSync(cacacheTmp)) {
+        for (const entry of fs13.readdirSync(cacacheTmp)) {
           if (!entry.startsWith("git-clone")) continue;
           const pkgJson = path18.join(cacacheTmp, entry, "package.json");
           try {
-            if (fs12.existsSync(pkgJson) && JSON.parse(fs12.readFileSync(pkgJson, "utf-8")).name === "@Quon/codegraph") {
-              fs12.rmSync(path18.join(cacacheTmp, entry), { recursive: true, force: true });
+            if (fs13.existsSync(pkgJson) && JSON.parse(fs13.readFileSync(pkgJson, "utf-8")).name === "@Quon/codegraph") {
+              fs13.rmSync(path18.join(cacacheTmp, entry), { recursive: true, force: true });
             }
           } catch {
           }
@@ -23712,13 +23777,13 @@ async function initializeLocalProject(clack) {
   }
   cg.close();
 }
-var import_child_process2, path18, fs12, os2, importESM;
+var import_child_process2, path18, fs13, os2, importESM;
 var init_installer = __esm({
   "src/installer/index.ts"() {
     "use strict";
     import_child_process2 = require("child_process");
     path18 = __toESM(require("path"));
-    fs12 = __toESM(require("fs"));
+    fs13 = __toESM(require("fs"));
     os2 = __toESM(require("os"));
     init_config_writer();
     importESM = new Function("specifier", "return import(specifier)");
@@ -23744,7 +23809,7 @@ var {
 
 // src/bin/codegraph.ts
 var path19 = __toESM(require("path"));
-var fs13 = __toESM(require("fs"));
+var fs14 = __toESM(require("fs"));
 init_directory();
 init_projects();
 init_shimmer_progress();
@@ -23814,7 +23879,7 @@ process.on("unhandledRejection", (reason) => {
 function main() {
   const program2 = new Command();
   const packageJson = JSON.parse(
-    fs13.readFileSync(path19.join(__dirname, "..", "..", "package.json"), "utf-8")
+    fs14.readFileSync(path19.join(__dirname, "..", "..", "package.json"), "utf-8")
   );
   const colors = {
     reset: "\x1B[0m",
@@ -23954,14 +24019,14 @@ function main() {
       }
     } else if (projectPath) {
       const logPath = path19.join(projectPath, ".codegraph", "errors.log");
-      if (fs13.existsSync(logPath)) {
-        fs13.unlinkSync(logPath);
+      if (fs14.existsSync(logPath)) {
+        fs14.unlinkSync(logPath);
       }
     }
   }
   function writeErrorLog(projectPath, errors) {
     const cgDir = path19.join(projectPath, ".codegraph");
-    if (!fs13.existsSync(cgDir)) return;
+    if (!fs14.existsSync(cgDir)) return;
     const logPath = path19.join(cgDir, "errors.log");
     const errorsByFile = /* @__PURE__ */ new Map();
     const noFileErrors = [];
@@ -23991,7 +24056,7 @@ function main() {
     for (const err of noFileErrors) {
       lines.push(err.message);
     }
-    fs13.writeFileSync(logPath, lines.join("\n") + "\n");
+    fs14.writeFileSync(logPath, lines.join("\n") + "\n");
   }
   program2.command("init [path]").description("Initialize CodeGraph in a project directory").option("-i, --index", "Run initial indexing after initialization").option("-v, --verbose", "Show detailed worker lifecycle and memory info").action(async (pathArg, options) => {
     const projectPath = path19.resolve(pathArg || process.cwd());
@@ -24494,11 +24559,11 @@ Project Structure (${files.length} files):
         return;
       }
       const lockPath = path19.join(getCodeGraphDir(projectPath), "codegraph.lock");
-      if (!fs13.existsSync(lockPath)) {
+      if (!fs14.existsSync(lockPath)) {
         info("No lock file found \u2014 nothing to do");
         return;
       }
-      fs13.unlinkSync(lockPath);
+      fs14.unlinkSync(lockPath);
       success("Removed lock file. You can now run indexing again.");
     } catch (err) {
       error(`Failed to remove lock: ${err instanceof Error ? err.message : String(err)}`);
@@ -24519,7 +24584,7 @@ Project Structure (${files.length} files):
       }
       let changedFiles = [...fileArgs || []];
       if (options.stdin) {
-        const stdinData = fs13.readFileSync(0, "utf-8");
+        const stdinData = fs14.readFileSync(0, "utf-8");
         const stdinFiles = stdinData.split("\n").map((f) => f.trim()).filter(Boolean);
         changedFiles.push(...stdinFiles);
       }

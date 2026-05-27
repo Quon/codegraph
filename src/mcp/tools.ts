@@ -363,6 +363,14 @@ export class ToolHandler {
   }
 
   /**
+   * Whether a project at the given absolute path is already cached.
+   * Used to make incremental sub-project loading idempotent.
+   */
+  hasProject(projectPath: string): boolean {
+    return this.projectCache.has(projectPath);
+  }
+
+  /**
    * Resolve a project identifier to one or more CodeGraph instances.
    */
   private resolveProjects(project?: string, projectPath?: string): Map<string, CodeGraph> {

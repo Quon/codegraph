@@ -76,6 +76,11 @@ export declare class ToolHandler {
      */
     addToCache(projectPath: string, cg: CodeGraph): void;
     /**
+     * Whether a project at the given absolute path is already cached.
+     * Used to make incremental sub-project loading idempotent.
+     */
+    hasProject(projectPath: string): boolean;
+    /**
      * Resolve a project identifier to one or more CodeGraph instances.
      */
     private resolveProjects;

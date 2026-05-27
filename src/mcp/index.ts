@@ -15,6 +15,7 @@
  * ```
  */
 
+import * as fs from 'fs';
 import * as path from 'path';
 import CodeGraph, { findNearestCodeGraphRoot, findNearestMonorepoRoot, isInitialized, loadProjectEntries } from '../index';
 import { StdioTransport, JsonRpcRequest, JsonRpcNotification, ErrorCodes } from './transport';
@@ -64,6 +65,8 @@ export class MCPServer {
   private cg: CodeGraph | null = null;
   private toolHandler: ToolHandler;
   private projectPath: string | null;
+  private projectsJsonWatcher: fs.FSWatcher | null = null;
+  private projectsReloadTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(projectPath?: string) {
     this.projectPath = projectPath || null;
@@ -114,6 +117,7 @@ export class MCPServer {
         this.projectPath = monorepoRoot;
         this.toolHandler.setProjectRoot(monorepoRoot);
         await this.loadSubProjects(monorepoRoot);
+        this.watchProjectsJson(monorepoRoot);
       } else {
         this.projectPath = projectPath;
       }
@@ -127,6 +131,7 @@ export class MCPServer {
       this.toolHandler.setDefaultCodeGraph(this.cg);
       this.toolHandler.setProjectRoot(resolvedRoot);
       await this.loadSubProjects(resolvedRoot);
+      this.watchProjectsJson(resolvedRoot);
       this.startWatching();
     } catch (err) {
       // Log the error so transient failures are diagnosable (see issue #47)
@@ -136,25 +141,69 @@ export class MCPServer {
   }
 
   /**
-   * Eagerly open and cache all registered sub-projects (up to 20).
+   * Open and cache any registered sub-projects not already cached.
+   * Idempotent — safe to call multiple times when projects.json changes.
    */
   private async loadSubProjects(projectRoot: string): Promise<void> {
     const entries = loadProjectEntries(projectRoot);
-    if (entries.length === 0 || entries.length > 20) return;
+    if (entries.length === 0) return;
 
+    let opened = 0;
     for (const entry of entries) {
       const absPath = path.resolve(projectRoot, entry.path);
-      if (isInitialized(absPath)) {
-        try {
-          const subCg = CodeGraph.openSync(absPath);
-          this.toolHandler.addToCache(absPath, subCg);
-          this.toolHandler.startWatcherFor(entry.name, absPath, subCg);
-        } catch (err) {
-          process.stderr.write(
-            `[CodeGraph MCP] Failed to open sub-project "${entry.name}": ${err}\n`
-          );
-        }
+      if (this.toolHandler.hasProject(absPath)) continue;
+      if (!isInitialized(absPath)) continue;
+
+      try {
+        const subCg = CodeGraph.openSync(absPath);
+        this.toolHandler.addToCache(absPath, subCg);
+        this.toolHandler.startWatcherFor(entry.name, absPath, subCg);
+        opened++;
+      } catch (err) {
+        process.stderr.write(
+          `[CodeGraph MCP] Failed to open sub-project "${entry.name}": ${err}\n`
+        );
       }
+    }
+
+    if (opened > 0) {
+      process.stderr.write(`[CodeGraph MCP] Loaded ${opened} sub-project(s)\n`);
+    }
+  }
+
+  /**
+   * Watch the monorepo's projects.json so sub-projects added during the
+   * MCP session (e.g. via `codegraph project add`) are picked up without a
+   * server restart.
+   *
+   * We watch the parent .codegraph/ directory rather than the file itself
+   * because saveProjects() does an atomic temp-file + rename, which breaks
+   * single-file watchers on Windows. Reload is debounced 500ms to coalesce
+   * the tmp-create + rename event pair.
+   */
+  private watchProjectsJson(projectRoot: string): void {
+    if (this.projectsJsonWatcher) return;
+    const cgDir = path.join(projectRoot, '.codegraph');
+    if (!fs.existsSync(cgDir)) return;
+
+    try {
+      this.projectsJsonWatcher = fs.watch(cgDir, (_eventType, filename) => {
+        if (filename !== 'projects.json' && filename !== 'projects.json.tmp') return;
+        if (this.projectsReloadTimer) clearTimeout(this.projectsReloadTimer);
+        this.projectsReloadTimer = setTimeout(() => {
+          this.projectsReloadTimer = null;
+          this.loadSubProjects(projectRoot).catch((err) => {
+            process.stderr.write(
+              `[CodeGraph MCP] Failed to reload sub-projects after projects.json change: ${err}\n`
+            );
+          });
+        }, 500);
+      });
+      this.projectsJsonWatcher.on('error', (err) => {
+        process.stderr.write(`[CodeGraph MCP] projects.json watcher error: ${err}\n`);
+      });
+    } catch (err) {
+      process.stderr.write(`[CodeGraph MCP] Could not watch projects.json: ${err}\n`);
     }
   }
 
@@ -178,6 +227,7 @@ export class MCPServer {
         this.projectPath = monorepoRoot;
         this.toolHandler.setProjectRoot(monorepoRoot);
         this.loadSubProjects(monorepoRoot).catch(() => {});
+        this.watchProjectsJson(monorepoRoot);
       }
       return;
     }
@@ -226,6 +276,16 @@ export class MCPServer {
    * Stop the server
    */
   stop(): void {
+    // Stop projects.json watcher and any pending reload
+    if (this.projectsReloadTimer) {
+      clearTimeout(this.projectsReloadTimer);
+      this.projectsReloadTimer = null;
+    }
+    if (this.projectsJsonWatcher) {
+      this.projectsJsonWatcher.close();
+      this.projectsJsonWatcher = null;
+    }
+
     // Close all cached cross-project connections first
     this.toolHandler.closeAll();
     // Close the main CodeGraph instance

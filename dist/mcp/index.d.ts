@@ -25,6 +25,8 @@ export declare class MCPServer {
     private cg;
     private toolHandler;
     private projectPath;
+    private projectsJsonWatcher;
+    private projectsReloadTimer;
     constructor(projectPath?: string);
     /**
      * Start the MCP server
@@ -45,9 +47,21 @@ export declare class MCPServer {
      */
     private tryInitializeDefault;
     /**
-     * Eagerly open and cache all registered sub-projects (up to 20).
+     * Open and cache any registered sub-projects not already cached.
+     * Idempotent — safe to call multiple times when projects.json changes.
      */
     private loadSubProjects;
+    /**
+     * Watch the monorepo's projects.json so sub-projects added during the
+     * MCP session (e.g. via `codegraph project add`) are picked up without a
+     * server restart.
+     *
+     * We watch the parent .codegraph/ directory rather than the file itself
+     * because saveProjects() does an atomic temp-file + rename, which breaks
+     * single-file watchers on Windows. Reload is debounced 500ms to coalesce
+     * the tmp-create + rename event pair.
+     */
+    private watchProjectsJson;
     /**
      * Retry initialization of the default project if it previously failed.
      * Called lazily on tool calls that need the default project.
