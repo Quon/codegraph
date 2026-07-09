@@ -4,6 +4,22 @@
  * Shared module for search term extraction and scoring.
  */
 import { Node } from '../types';
+/** Normalize a name to a comparable token: lowercase, alphanumerics only. */
+export declare function normalizeNameToken(raw: string): string;
+/**
+ * Tokens that name the PROJECT as a whole — its `go.mod` module, `package.json`
+ * name, or repo root directory — rather than any specific symbol. A user
+ * naturally puts the project name in a query as context ("MyApp backend
+ * routes"), but it carries no discriminative signal: when it's also a substring
+ * of a symbol or path on one stack (a `MyAppFrontend/` dir, a `MyAppApp` class)
+ * it lexically inflates that stack and buries the rest (#720).
+ *
+ * Returned normalized (lowercase, alphanumerics only) so a query word can be
+ * compared by its normalized form. Only names ≥5 chars are kept — short ones
+ * (`api`, `app`, `core`, `web`) collide with real query terms too often to
+ * safely down-weight.
+ */
+export declare function deriveProjectNameTokens(projectRoot: string): Set<string>;
 /**
  * Common stop words to filter from search queries.
  * Includes generic English + code-specific noise words.
@@ -34,7 +50,7 @@ export declare function extractSearchTerms(query: string, options?: {
  * Score path relevance to a query
  * Higher score = more relevant path
  */
-export declare function scorePathRelevance(filePath: string, query: string): number;
+export declare function scorePathRelevance(filePath: string, query: string, projectNameTokens?: Set<string>): number;
 /**
  * Check if a file path looks like a test file
  */
@@ -50,4 +66,22 @@ export declare function nameMatchBonus(nodeName: string, query: string): number;
  * Functions and classes are typically more relevant than variables/imports
  */
 export declare function kindBonus(kind: Node['kind']): number;
+/**
+ * Whether a query token looks like a code identifier the user deliberately typed
+ * (camelCase / PascalCase-with-internal-caps / snake_case / has a digit) rather
+ * than a plain dictionary word ("flat", "object", "screen").
+ *
+ * Used to decide whether an EXACT name match earns the "the user named this
+ * symbol" exemption from single-term dampening. A common English word that
+ * happens to exact-match an unrelated symbol — the query "flat object" matching
+ * a constant named `FLAT` — must NOT get that exemption, or the +exact-name
+ * bonus floats it to the top of a prose query on its own.
+ *
+ * Classifies the token AS THE USER TYPED IT, not the matched symbol's name:
+ * "flat" (lowercase, descriptive) is non-distinctive even though it matches
+ * `FLAT`. A leading-capital-only word ("Screen", "Zustand") is also treated as
+ * a plain word — sentence-start capitalization and proper nouns aren't reliable
+ * identifier signals.
+ */
+export declare function isDistinctiveIdentifier(token: string): boolean;
 //# sourceMappingURL=query-utils.d.ts.map

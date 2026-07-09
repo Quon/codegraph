@@ -14,7 +14,7 @@ exports.getMigrationHistory = getMigrationHistory;
 /**
  * Current schema version
  */
-exports.CURRENT_SCHEMA_VERSION = 4;
+exports.CURRENT_SCHEMA_VERSION = 7;
 /**
  * All migrations in order
  *
@@ -26,15 +26,37 @@ const migrations = [
         version: 2,
         description: 'Add project metadata, provenance tracking, and unresolved ref context',
         up: (db) => {
+            // Create unresolved_refs if it doesn't exist (pre-v2 databases may not have it)
             db.exec(`
+        CREATE TABLE IF NOT EXISTS unresolved_refs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          from_node_id TEXT NOT NULL,
+          reference_name TEXT NOT NULL,
+          reference_kind TEXT NOT NULL,
+          line INTEGER NOT NULL,
+          col INTEGER NOT NULL,
+          candidates TEXT,
+          FOREIGN KEY (from_node_id) REFERENCES nodes(id) ON DELETE CASCADE
+        );
         CREATE TABLE IF NOT EXISTS project_metadata (
           key TEXT PRIMARY KEY,
           value TEXT NOT NULL,
           updated_at INTEGER NOT NULL
         );
-        ALTER TABLE unresolved_refs ADD COLUMN file_path TEXT NOT NULL DEFAULT '';
-        ALTER TABLE unresolved_refs ADD COLUMN language TEXT NOT NULL DEFAULT 'unknown';
-        ALTER TABLE edges ADD COLUMN provenance TEXT DEFAULT NULL;
+      `);
+            // ADD COLUMN is not idempotent in SQLite — check before altering
+            const unresCols = new Set(db.prepare('PRAGMA table_info(unresolved_refs)').all().map((c) => c.name));
+            if (!unresCols.has('file_path')) {
+                db.exec(`ALTER TABLE unresolved_refs ADD COLUMN file_path TEXT NOT NULL DEFAULT '';`);
+            }
+            if (!unresCols.has('language')) {
+                db.exec(`ALTER TABLE unresolved_refs ADD COLUMN language TEXT NOT NULL DEFAULT 'unknown';`);
+            }
+            const edgeCols = new Set(db.prepare('PRAGMA table_info(edges)').all().map((c) => c.name));
+            if (!edgeCols.has('provenance')) {
+                db.exec(`ALTER TABLE edges ADD COLUMN provenance TEXT DEFAULT NULL;`);
+            }
+            db.exec(`
         CREATE INDEX IF NOT EXISTS idx_unresolved_file_path ON unresolved_refs(file_path);
         CREATE INDEX IF NOT EXISTS idx_edges_provenance ON edges(provenance);
       `);
@@ -56,6 +78,57 @@ const migrations = [
             db.exec(`
         DROP INDEX IF EXISTS idx_edges_source;
         DROP INDEX IF EXISTS idx_edges_target;
+      `);
+        },
+    },
+    {
+        version: 5,
+        description: 'Add nodes.return_type — normalized return/result type for receiver-type inference (C++ singletons/factories, #645)',
+        up: (db) => {
+            db.exec(`
+        ALTER TABLE nodes ADD COLUMN return_type TEXT;
+      `);
+        },
+    },
+    {
+        version: 6,
+        description: 'Dedup duplicate edge rows and add a UNIQUE identity index so INSERT OR IGNORE actually dedups (#1034)',
+        up: (db) => {
+            // `insertEdge` has always used `INSERT OR IGNORE`, but the edges table had
+            // no UNIQUE constraint, so nothing conflicted and byte-identical rows
+            // accumulated whenever two passes emitted the same edge. Collapse each
+            // identity group to its lowest id, then add the constraint that makes
+            // `OR IGNORE` keep its promise. IFNULL folds nullable line/col so
+            // coordinate-less edges dedup too (SQLite treats each NULL as distinct) —
+            // and it MUST match the GROUP BY exactly, or the index creation would
+            // fail on a pair the DELETE left behind. Idempotent: the index is
+            // `IF NOT EXISTS` and the DELETE is a no-op once the table is unique.
+            db.exec(`
+        DELETE FROM edges
+        WHERE id NOT IN (
+          SELECT MIN(id) FROM edges
+          GROUP BY source, target, kind, IFNULL(line, -1), IFNULL(col, -1)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_identity
+          ON edges(source, target, kind, IFNULL(line, -1), IFNULL(col, -1));
+      `);
+        },
+    },
+    {
+        version: 7,
+        description: 'Add name_segment_vocab — prose-word → symbol-name lookup for the prompt hook’s graph-derived gate',
+        up: (db) => {
+            // DDL only — instant on any size database (the row-churn hazards of #1067
+            // don't apply). The table starts EMPTY on migrated databases; `sync`
+            // detects that over a populated graph and backfills batched+yielding
+            // (CodeGraph.rebuildNameSegmentVocab), and any full index rebuilds it
+            // from scratch. Keep the definition in lockstep with schema.sql.
+            db.exec(`
+        CREATE TABLE IF NOT EXISTS name_segment_vocab (
+          segment TEXT NOT NULL,
+          name TEXT NOT NULL,
+          PRIMARY KEY (segment, name)
+        ) WITHOUT ROWID;
       `);
         },
     },

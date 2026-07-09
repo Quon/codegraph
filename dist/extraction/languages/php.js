@@ -2,6 +2,74 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.phpExtractor = void 0;
 const tree_sitter_helpers_1 = require("../tree-sitter-helpers");
+// include / require (+ _once) expression node types. These carry the
+// file→file dependency in procedural PHP, where `include`/`require` — not
+// namespace `use` — is how a file pulls in another (issue #660).
+const PHP_INCLUDE_TYPES = new Set([
+    'include_expression',
+    'include_once_expression',
+    'require_expression',
+    'require_once_expression',
+]);
+/**
+ * Extract a static string-literal path from a PHP include/require expression.
+ *
+ * Returns null for dynamic forms (`include $var`, `require __DIR__ . '/x'`,
+ * interpolated strings) — they have no resolvable compile-time path, which
+ * matches the issue's "static string literals (the common case)" scope.
+ */
+function phpStaticIncludePath(node, source) {
+    // The path argument is the expression's first named child; the call-style
+    // form `require("x")` wraps it in a parenthesized_expression.
+    let arg = node.namedChild(0);
+    if (arg?.type === 'parenthesized_expression')
+        arg = arg.namedChild(0);
+    if (!arg || (arg.type !== 'string' && arg.type !== 'encapsed_string'))
+        return null;
+    // Pure literal only: any non-`string_content` child (interpolated variable,
+    // escape sequence, …) means the value isn't a static path.
+    const parts = arg.namedChildren;
+    if (parts.some((c) => c.type !== 'string_content'))
+        return null;
+    const content = parts.find((c) => c.type === 'string_content');
+    return content ? (0, tree_sitter_helpers_1.getNodeText)(content, source) : null;
+}
+/** PHP built-in return types that can't be a method receiver (so no class to chain on). */
+const PHP_NON_CLASS_RETURN = new Set([
+    'array', 'string', 'int', 'integer', 'float', 'double', 'bool', 'boolean',
+    'void', 'mixed', 'never', 'null', 'false', 'true', 'object', 'callable',
+    'iterable', 'resource',
+]);
+/**
+ * A method/function's declared return type, normalized to the class a chained
+ * `->method()` could be called on (issue #608). `self` / `static` / `$this` are
+ * kept as the marker `self` and resolved to the declaring class at resolution
+ * time; a concrete type returns its short name; primitives / unions / nullable
+ * non-class types return undefined.
+ */
+function extractPhpReturnType(node, source) {
+    let rt = (0, tree_sitter_helpers_1.getChildByField)(node, 'return_type');
+    if (!rt)
+        return undefined;
+    // Unwrap `?Type`. Union / intersection types are ambiguous — skip them.
+    if (rt.type === 'optional_type')
+        rt = rt.namedChild(0) ?? rt;
+    if (!rt || rt.type === 'primitive_type')
+        return undefined;
+    const nameNode = rt.type === 'named_type' ? (rt.namedChild(0) ?? rt) : rt;
+    const text = (0, tree_sitter_helpers_1.getNodeText)(nameNode, source).trim().replace(/^\\/, '');
+    if (!text)
+        return undefined;
+    const last = text.split('\\').pop() ?? text;
+    const lc = last.toLowerCase();
+    if (lc === 'self' || lc === 'static' || lc === 'this' || lc === '$this')
+        return 'self';
+    if (PHP_NON_CLASS_RETURN.has(lc))
+        return undefined;
+    if (!/^[A-Za-z_]\w*$/.test(last))
+        return undefined; // union/intersection/complex
+    return last;
+}
 exports.phpExtractor = {
     functionTypes: ['function_definition'],
     classTypes: ['class_declaration', 'trait_declaration'],
@@ -11,7 +79,7 @@ exports.phpExtractor = {
     enumTypes: ['enum_declaration'],
     enumMemberTypes: ['enum_case'],
     typeAliasTypes: [],
-    importTypes: ['namespace_use_declaration'],
+    importTypes: ['namespace_use_declaration', ...PHP_INCLUDE_TYPES],
     callTypes: ['function_call_expression', 'member_call_expression', 'scoped_call_expression'],
     variableTypes: ['const_declaration'],
     fieldTypes: ['property_declaration'],
@@ -19,6 +87,7 @@ exports.phpExtractor = {
     bodyField: 'body',
     paramsField: 'parameters',
     returnField: 'return_type',
+    getReturnType: extractPhpReturnType,
     classifyClassNode: (node) => {
         return node.type === 'trait_declaration' ? 'trait' : 'class';
     },
@@ -81,8 +150,28 @@ exports.phpExtractor = {
         }
         return false;
     },
+    // PHP `namespace Foo\Bar;` is file-level (like a Java/Kotlin package). Capturing
+    // it scopes every class under an `Foo\Bar::` qualified name, which is what makes
+    // `use` imports and same-named types (Laravel has 7+ `Factory` interfaces across
+    // namespaces) resolvable to the RIGHT definition instead of an arbitrary match.
+    packageTypes: ['namespace_definition'],
+    extractPackage: (node, source) => {
+        const nsName = node.namedChildren.find((c) => c.type === 'namespace_name');
+        // Skip braced `namespace Foo { … }` (has a body) — file-level only.
+        const hasBody = node.namedChildren.some((c) => c.type === 'compound_statement' || c.type === 'declaration_list');
+        if (!nsName || hasBody)
+            return null;
+        return (0, tree_sitter_helpers_1.getNodeText)(nsName, source);
+    },
     extractImport: (node, source) => {
         const importText = source.substring(node.startIndex, node.endIndex).trim();
+        // include / require (+ _once): emit a file→file dependency. The path is a
+        // static string literal in the common case; dynamic forms resolve to null
+        // and are skipped (no import node, no edge).
+        if (PHP_INCLUDE_TYPES.has(node.type)) {
+            const includePath = phpStaticIncludePath(node, source);
+            return includePath ? { moduleName: includePath, signature: importText } : null;
+        }
         // Check for grouped imports: use X\{A, B} - return null for core fallback
         const namespacePrefix = node.namedChildren.find((c) => c.type === 'namespace_name');
         const useGroup = node.namedChildren.find((c) => c.type === 'namespace_use_group');

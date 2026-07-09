@@ -2,13 +2,13 @@
 /**
  * CodeGraph preuninstall cleanup script
  *
- * Runs automatically when `npm uninstall -g @colbymchenry/codegraph` is called.
- * Removes all CodeGraph configuration from Claude Code:
- *   - MCP server entry from ~/.claude.json
- *   - Permissions from ~/.claude/settings.json
- *   - CodeGraph section from ~/.claude/CLAUDE.md
+ * Runs automatically when `npm uninstall -g @colbymchenry/codegraph`
+ * is called. Loops over every known agent target's `uninstall(loc)`
+ * for the global location only — local-location entries live inside
+ * project working trees and aren't ours to nuke at npm-uninstall
+ * time.
  *
- * This script must never throw — a failed cleanup must not block uninstall.
+ * This script must never throw — a failed cleanup must not block
+ * uninstall.
  */
-export {};
 //# sourceMappingURL=uninstall.d.ts.map

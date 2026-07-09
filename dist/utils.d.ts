@@ -29,14 +29,53 @@
  * ```
  */
 /**
- * Validate that a resolved file path stays within the project root.
- * Prevents path traversal attacks (e.g. node.filePath = "../../etc/passwd").
+ * Config "languages" whose nodes are pure key/value DATA lifted from a config
+ * file (e.g. Spring `application.{yml,properties}`), not source code.
+ */
+export declare const CONFIG_LEAF_LANGUAGES: ReadonlySet<string>;
+/**
+ * A config-leaf node is a single key lifted out of a pure config/data file —
+ * `kind: 'constant'` in a {@link CONFIG_LEAF_LANGUAGES} language. Its on-disk
+ * line is `key = <value>`, and that value is routinely a secret (DB password,
+ * API key, JDBC URL with embedded creds). CodeGraph must surface the KEY only
+ * and never read/return the value, or it pushes secrets into agent context
+ * unbidden — the value isn't needed for resolution, and an agent that genuinely
+ * needs it can read the file directly. (#383)
+ */
+export declare function isConfigLeafNode(node: {
+    kind: string;
+    language?: string;
+}): boolean;
+/**
+ * Validate that a file path stays within the project root, resolving symlinks.
+ *
+ * Two layers: a cheap lexical check that catches `../` traversal, then a
+ * realpath check that catches symlink escapes — an in-repo symlink whose
+ * logical path is inside the root but whose real target points outside it
+ * (issue #527). A symlink that stays within the root is still allowed, so
+ * legitimate in-tree symlinks keep working. Both content-serving read sinks
+ * (codegraph_node `includeCode`, codegraph_explore source) go through here, so
+ * this is the chokepoint that keeps out-of-root file contents from leaking.
+ *
+ * `allowSymlinkEscape` waives **only** the realpath-escape rejection (the
+ * lexical `../` guard still applies) for the INDEXING read path. The directory
+ * walk deliberately descends into in-root symlinks whose targets live outside
+ * the root (e.g. a `game/` symlink in a Dota custom-game tree, #935); discovery
+ * and the reader must agree, or every file the walk enumerated fails to index.
+ * Indexing only reads paths it just discovered, into a local index — it never
+ * serves them to an agent, so this does not widen the #527 leak surface. The
+ * content-serving sinks must never pass this flag.
  *
  * @param projectRoot - The project root directory
- * @param filePath - The relative file path to validate
- * @returns The resolved absolute path, or null if it escapes the root
+ * @param filePath - The (relative or absolute) file path to validate
+ * @param options.allowSymlinkEscape - Follow in-root symlinks out of the root
+ *   (indexing read path only); defaults to the strict, leak-safe behavior.
+ * @returns The resolved absolute path (realpath when it exists), or null if it
+ *   escapes the root
  */
-export declare function validatePathWithinRoot(projectRoot: string, filePath: string): string | null;
+export declare function validatePathWithinRoot(projectRoot: string, filePath: string, options?: {
+    allowSymlinkEscape?: boolean;
+}): string | null;
 /**
  * Validate that a path is a safe project root directory.
  *
@@ -48,26 +87,6 @@ export declare function validatePathWithinRoot(projectRoot: string, filePath: st
  * @returns An error message if invalid, or null if valid
  */
 export declare function validateProjectPath(dirPath: string): string | null;
-/**
- * Check if a file path resolves to a location within the given root directory.
- *
- * Prevents path traversal attacks by ensuring the resolved absolute path
- * starts with the resolved root path. Handles '..' sequences, symlink-like
- * relative paths, and platform-specific separators.
- *
- * @param filePath - The path to check (can be relative or absolute)
- * @param rootDir - The root directory that filePath must stay within
- * @returns true if filePath resolves to a location within rootDir
- */
-export declare function isPathWithinRoot(filePath: string, rootDir: string): boolean;
-/**
- * Like isPathWithinRoot but also resolves symlinks via fs.realpathSync.
- *
- * This catches symlink escapes where the logical path appears to be within
- * root but the real path on disk points elsewhere. Falls back to logical
- * path checking if realpath resolution fails (e.g. broken symlink).
- */
-export declare function isPathWithinRootReal(filePath: string, rootDir: string): boolean;
 /**
  * Safely parse JSON with a fallback value.
  * Prevents crashes from corrupted database metadata.

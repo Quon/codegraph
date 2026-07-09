@@ -56,7 +56,10 @@ worker_threads_1.parentPort.on('message', async (msg) => {
     else if (msg.type === 'parse') {
         const { id, filePath, content, frameworkNames } = msg;
         try {
-            const language = (0, grammars_1.detectLanguage)(filePath, content);
+            // The main thread resolves the language (it holds the project's
+            // codegraph.json extension overrides) and sends it; fall back to detection
+            // for older callers / safety.
+            const language = msg.language ?? (0, grammars_1.detectLanguage)(filePath, content);
             const result = (0, tree_sitter_1.extractFromSource)(filePath, content, language, frameworkNames);
             // Periodic parser reset to reclaim WASM heap memory
             const count = (parseCounts.get(language) ?? 0) + 1;

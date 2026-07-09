@@ -1,8 +1,13 @@
 /**
  * SQLite Adapter
  *
- * Provides a unified interface over better-sqlite3 (native) and
- * node-sqlite3-wasm (WASM fallback) for universal cross-platform support.
+ * Thin wrapper over Node's built-in `node:sqlite` (`DatabaseSync`), exposed
+ * through a small better-sqlite3-shaped interface so the rest of the codebase
+ * is storage-agnostic.
+ *
+ * CodeGraph ships with a bundled Node runtime, so `node:sqlite` (real SQLite,
+ * with WAL + FTS5) is always available — there is no native build step and no
+ * wasm fallback. When run from source instead, it requires Node >= 22.5.
  */
 export interface SqliteStatement {
     run(...params: any[]): {
@@ -11,39 +16,35 @@ export interface SqliteStatement {
     };
     get(...params: any[]): any;
     all(...params: any[]): any[];
+    /**
+     * Lazily yield result rows one at a time instead of materializing the whole
+     * set with `all()`. Use for unbounded scans (e.g. every function/method node)
+     * so memory stays O(1) in the row count rather than O(rows) — see #610, where
+     * `all()`-ing every symbol on a dense project spiked the heap into an OOM.
+     */
+    iterate(...params: any[]): IterableIterator<any>;
 }
 export interface SqliteDatabase {
     prepare(sql: string): SqliteStatement;
     exec(sql: string): void;
-    pragma(str: string): any;
+    pragma(str: string, options?: {
+        simple?: boolean;
+    }): any;
     transaction<T>(fn: (...args: any[]) => T): (...args: any[]) => T;
     close(): void;
     readonly open: boolean;
 }
-export type SqliteBackend = 'native' | 'wasm';
 /**
- * One-line summary of the recovery steps shown when WASM fallback is
- * active. Single source of truth so the recipe can't drift between the
- * stderr banner and the MCP status formatter.
+ * The active SQLite backend. Only one now (`node:sqlite`); kept as a named type
+ * so `codegraph status` and the per-instance reporting have a stable shape.
  */
-export declare const WASM_FALLBACK_FIX_RECIPE: string;
+export type SqliteBackend = 'node-sqlite';
 /**
- * Multi-line banner shown to stderr when `createDatabase` falls back to
- * WASM. Replaces a one-line `console.warn` that MCP transports (which
- * take stdout for the protocol) typically swallow, leaving users on a
- * 5-10x slower backend with no signal.
+ * Create a database connection backed by `node:sqlite`.
  *
- * Exported for unit testing — pinning the recipe content prevents
- * future edits from silently stripping the recovery commands.
- */
-export declare function buildWasmFallbackBanner(nativeError?: string): string;
-/**
- * Create a database connection. Tries native better-sqlite3 first,
- * falls back to node-sqlite3-wasm. Returns the active backend
- * alongside the db so each `DatabaseConnection` can report its own
- * backend per-instance — MCP can open multiple project DBs in one
- * process (`tools.ts` getCodeGraph cache), so a process-global would
- * race / overwrite.
+ * Returns the active backend alongside the db so each `DatabaseConnection` can
+ * report it per-instance — MCP can open multiple project DBs in one process, so
+ * a process-global would race.
  */
 export declare function createDatabase(dbPath: string): {
     db: SqliteDatabase;

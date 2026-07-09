@@ -1,49 +1,79 @@
 "use strict";
-var __defProp = Object.defineProperty;
-var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
-var __getOwnPropNames = Object.getOwnPropertyNames;
-var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __export = (target, all) => {
-  for (var name in all)
-    __defProp(target, name, { get: all[name], enumerable: true });
-};
-var __copyProps = (to, from, except, desc) => {
-  if (from && typeof from === "object" || typeof from === "function") {
-    for (let key of __getOwnPropNames(from))
-      if (!__hasOwnProp.call(to, key) && key !== except)
-        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
-  }
-  return to;
-};
-var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
-
-// src/bin/node-version-check.ts
-var node_version_check_exports = {};
-__export(node_version_check_exports, {
-  buildNodeBlockBanner: () => buildNodeBlockBanner
-});
-module.exports = __toCommonJS(node_version_check_exports);
-function buildNodeBlockBanner(nodeVersion) {
-  const sep = "\u2500".repeat(72);
-  return [
-    sep,
-    `[CodeGraph] Unsupported Node.js version: ${nodeVersion}`,
-    sep,
-    "Node.js 25.x has a V8 WASM JIT (turboshaft) Zone allocator bug that",
-    "crashes with `Fatal process out of memory: Zone` when CodeGraph",
-    "compiles tree-sitter grammars. CodeGraph WILL crash on this Node",
-    "version mid-indexing. See https://github.com/colbymchenry/codegraph/issues/81",
-    "",
-    "Fix: install Node.js 22 LTS:",
-    "  nvm install 22 && nvm use 22                          # nvm",
-    "  brew install node@22 && brew link --overwrite --force node@22  # Homebrew",
-    "",
-    "To override (NOT recommended \u2014 you will likely OOM):",
-    "  CODEGRAPH_ALLOW_UNSAFE_NODE=1 codegraph ...",
-    sep
-  ].join("\n");
+/**
+ * Node.js version compatibility check.
+ *
+ * Node 25.x has a V8 turboshaft WASM JIT Zone allocator bug that
+ * reliably crashes CodeGraph with `Fatal process out of memory: Zone`
+ * during tree-sitter grammar compilation. This module owns the
+ * user-facing banner shown before exit. Kept side-effect-free so it's
+ * safe to import from tests without triggering CLI bootstrap.
+ */
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.MIN_NODE_MAJOR = void 0;
+exports.buildNode25BlockBanner = buildNode25BlockBanner;
+exports.buildNodeTooOldBanner = buildNodeTooOldBanner;
+/**
+ * Build the bordered banner shown when CodeGraph detects an
+ * unsupported Node.js major version (currently 25+). Pinned via unit
+ * test so the recovery commands and override instructions can't be
+ * silently stripped by future edits.
+ *
+ * Uses ASCII glyphs to stay readable on Windows OEM-codepage consoles
+ * (see ../ui/glyphs.ts for the rationale).
+ */
+function buildNode25BlockBanner(nodeVersion) {
+    const sep = '-'.repeat(72);
+    return [
+        sep,
+        `[CodeGraph] Unsupported Node.js version: ${nodeVersion}`,
+        sep,
+        'Node.js 25.x has a V8 WASM JIT (turboshaft) Zone allocator bug that',
+        'crashes with `Fatal process out of memory: Zone` when CodeGraph',
+        'compiles tree-sitter grammars. CodeGraph WILL crash on this Node',
+        'version mid-indexing. See https://github.com/colbymchenry/codegraph/issues/81',
+        '',
+        'Fix: install Node.js 22 LTS:',
+        '  nvm install 22 && nvm use 22                          # nvm',
+        '  brew install node@22 && brew link --overwrite --force node@22  # Homebrew',
+        '',
+        'To override (NOT recommended - you will likely OOM):',
+        '  CODEGRAPH_ALLOW_UNSAFE_NODE=1 codegraph ...',
+        sep,
+    ].join('\n');
 }
-// Annotate the CommonJS export names for ESM import in node:
-0 && (module.exports = {
-  buildNodeBlockBanner
-});
+/**
+ * Lowest supported Node.js major version. Matches the `engines` floor in
+ * package.json. Below this, CodeGraph relies on language features / native APIs
+ * that aren't present, and the combination is untested. `engines` alone only
+ * *warns* on install (unless the user set `engine-strict`), so the CLI bootstrap
+ * also hard-blocks here to actually enforce the floor.
+ */
+exports.MIN_NODE_MAJOR = 20;
+/**
+ * Build the bordered banner shown when CodeGraph detects a Node.js major below
+ * {@link MIN_NODE_MAJOR}. Pinned via unit test so the recovery commands and the
+ * override env var can't be silently stripped by future edits.
+ *
+ * Uses ASCII glyphs to stay readable on Windows OEM-codepage consoles
+ * (see ../ui/glyphs.ts for the rationale).
+ */
+function buildNodeTooOldBanner(nodeVersion) {
+    const sep = '-'.repeat(72);
+    return [
+        sep,
+        `[CodeGraph] Unsupported Node.js version: ${nodeVersion}`,
+        sep,
+        `CodeGraph requires Node.js ${exports.MIN_NODE_MAJOR} or newer. Older versions lack`,
+        'language features and native APIs CodeGraph depends on, and are not',
+        'tested or supported.',
+        '',
+        'Fix: install Node.js 22 LTS:',
+        '  nvm install 22 && nvm use 22                          # nvm',
+        '  brew install node@22 && brew link --overwrite --force node@22  # Homebrew',
+        '',
+        'To override (NOT recommended - unsupported):',
+        '  CODEGRAPH_ALLOW_UNSAFE_NODE=1 codegraph ...',
+        sep,
+    ].join('\n');
+}
+//# sourceMappingURL=node-version-check.js.map

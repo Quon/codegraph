@@ -32,5 +32,20 @@ export declare class VueExtractor {
      * Process a script block by delegating to TreeSitterExtractor
      */
     private processScriptBlock;
+    /**
+     * Extract component usages from the Vue `<template>`.
+     *
+     * PascalCase tags (`<Modal>`, `<Button />`) and kebab-case tags
+     * (`<my-button>`) both represent component instantiations — analogous to
+     * function calls in imperative code. Capturing them creates parent→child
+     * component edges and lets `callers` / `impact` see a component that is
+     * only ever used in markup. Vue's extractor previously parsed only the
+     * `<script>` block, so these usages produced no edge at all (#629).
+     *
+     * HTML elements (lowercase, no hyphen) and Vue built-ins are skipped.
+     * Unmatched names create no edge during resolution, so converting
+     * kebab-case is safe even for native custom elements.
+     */
+    private extractTemplateComponents;
 }
 //# sourceMappingURL=vue-extractor.d.ts.map

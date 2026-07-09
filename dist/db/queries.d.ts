@@ -10,14 +10,28 @@ import { Node, Edge, FileRecord, UnresolvedReference, NodeKind, EdgeKind, GraphS
  */
 export declare class QueryBuilder {
     private db;
+    private projectNameTokens;
     private nodeCache;
     private readonly maxCacheSize;
     private stmts;
+    private segmentedNames;
+    private static readonly MAX_SEGMENTED_NAMES;
     constructor(db: SqliteDatabase);
+    /** Set the normalized project-name tokens used to down-weight non-discriminative
+     * query words in path scoring (#720). Called once when the project opens. */
+    setProjectNameTokens(tokens: Set<string>): void;
+    /** The normalized project-name tokens (#720); empty if none were derived. */
+    getProjectNameTokens(): Set<string>;
     /**
      * Insert a new node
      */
     insertNode(node: Node): void;
+    /** Which node kinds contribute their name to the segment vocabulary — the
+     *  single gate shared by insertNode, updateNode, and the rebuild page query
+     *  (getDistinctNodeNames), so the write paths can't drift apart. */
+    private isSegmentableKind;
+    /** Write `name`'s segments into name_segment_vocab (idempotent). */
+    private insertNameSegments;
     /**
      * Insert multiple nodes in a transaction
      */
@@ -34,10 +48,65 @@ export declare class QueryBuilder {
      * Delete all nodes for a file
      */
     deleteNodesByFile(filePath: string): void;
+    /** Wipe the segment vocabulary. A full index calls this at its start; the
+     *  node write path repopulates it as files (re-)index, so the end state is
+     *  exactly the current names with no orphan rows. */
+    clearNameSegmentVocab(): void;
+    /** True when the vocab has no rows — an index built before the table existed.
+     *  `sync` uses this to heal such databases (see rebuildNameSegmentVocabFrom). */
+    isNameSegmentVocabEmpty(): boolean;
+    /** One page of distinct segmentable node names, for batched vocab rebuilds
+     *  (file basenames and import specifiers are excluded from the vocab — see
+     *  insertNode). */
+    getDistinctNodeNames(limit: number, offset: number): string[];
+    /** Insert segments for a batch of names in one transaction (vocab heal path). */
+    insertNameSegmentsBatch(names: string[]): void;
+    /**
+     * Names whose segments cover at least `minWords` distinct PROMPT WORDS —
+     * the co-occurrence probe behind the prompt hook's medium tier: the words
+     * "state" and "machine" both being segments of `OrderStateMachine` is strong
+     * evidence the prompt names that symbol in prose. Ordered by coverage.
+     *
+     * Takes (segment variant → original word) pairs and folds variants back to
+     * their word INSIDE the SQL: a name matching both `service` and `services`
+     * counts ONE word, not two. Counting raw variants let plural-variant pairs
+     * of a single word tie with genuine two-word matches and — because ORDER
+     * BY/LIMIT run here, before any JS-side re-check — crowd a real match past
+     * the LIMIT on vocab-heavy repos (#1146).
+     */
+    getSegmentCoOccurrence(variants: Array<{
+        segment: string;
+        word: string;
+    }>, minWords: number, limit: number): Array<{
+        name: string;
+        matches: number;
+    }>;
+    /** How many distinct names each segment appears in — the rarity signal that
+     *  separates a discriminative word ("checkout") from a ubiquitous one ("state"). */
+    getSegmentNameCounts(segments: string[]): Map<string, number>;
+    /** Names containing the given segment (rare-single-word tier). */
+    getNamesForSegment(segment: string, limit: number): string[];
     /**
      * Get a node by ID
      */
     getNodeById(id: string): Node | null;
+    /**
+     * Batch lookup: fetch many nodes by ID in a single SQL round-trip.
+     *
+     * Replaces the N+1 pattern in graph traversal where every edge would
+     * trigger its own `getNodeById` call. For a function with 50 callers
+     * this collapses 50 point reads into one IN-list query (~10-50x
+     * faster end-to-end).
+     *
+     * Returns a Map keyed by id so callers can preserve their own ordering
+     * (typically the order edges were returned from the graph). Missing IDs
+     * are simply absent from the map.
+     *
+     * Cache-aware: ids already in the LRU cache are served from memory and
+     * the SQL query only touches the misses.
+     */
+    getNodesByIds(ids: readonly string[]): Map<string, Node>;
+    private getExistingNodeIds;
     /**
      * Add a node to the cache, evicting oldest if needed
      */
@@ -51,9 +120,80 @@ export declare class QueryBuilder {
      */
     getNodesByFile(filePath: string): Node[];
     /**
+     * Find the file that holds the densest concentration of the project's
+     * internal call graph — the "core" file. Used by context-builder to
+     * boost ranking of symbols in that file's directory (so e.g. sinatra
+     * queries surface `lib/sinatra/base.rb`'s `route!` instead of
+     * `sinatra-contrib/lib/sinatra/multi_route.rb`'s `route` extension).
+     *
+     * Returns null if no file has a meaningful concentration (e.g. spread
+     * evenly across many files, or empty index).
+     *
+     * "Internal" = source and target are in the same file. Cross-file
+     * edges aren't useful here — they don't tell us which file is the
+     * functional center.
+     *
+     * Excludes test/spec files from candidacy via path-pattern. The agent's
+     * typical question is "how does X work", not "how is X tested", so
+     * boosting a test file's directory would be a misfire.
+     */
+    getDominantFile(): {
+        filePath: string;
+        edgeCount: number;
+        nextEdgeCount: number;
+    } | null;
+    /**
+     * Find the file that holds the densest concentration of the project's
+     * `route` nodes (framework-emitted: Express/Gin/Flask/Rails/Drupal/etc.).
+     * Used by handleContext on small repos to inline the project's routing
+     * config when the agent's query is about request flow — eliminating the
+     * "Glob + Read routes.rb" pattern that beats codegraph on tiny realworld
+     * template repos.
+     *
+     * Excludes test/generated files from candidacy. Returns null if there
+     * are fewer than 3 non-test routes total, or if no file holds at least
+     * 30% of them (diffuse routing → no single answer file).
+     */
+    getTopRouteFile(): {
+        filePath: string;
+        routeCount: number;
+        totalRoutes: number;
+    } | null;
+    /**
+     * Build a URL → handler manifest from the index. Each route node's
+     * `references` edge points at the function/method that handles the
+     * request. We join them in one pass; the agent gets the canonical
+     * routing answer ("POST /users/login → AuthController#login") without
+     * having to parse the framework's route DSL itself.
+     *
+     * Also returns the file with the most handler endpoints — used as the
+     * "top handler file" to inline source for, so the agent has both the
+     * mapping AND the handler implementations.
+     */
+    getRoutingManifest(limit?: number): {
+        entries: Array<{
+            url: string;
+            handler: string;
+            handlerFile: string;
+            handlerLine: number;
+            handlerKind: string;
+        }>;
+        topHandlerFile: string | null;
+        topHandlerFileCount: number;
+        totalRoutes: number;
+    } | null;
+    /**
      * Get all nodes of a specific kind
      */
     getNodesByKind(kind: NodeKind): Node[];
+    /**
+     * Stream every node of a kind one at a time (lazy) instead of materializing
+     * them all like {@link getNodesByKind}. For unbounded kinds (`function`,
+     * `method`) on a symbol-dense project the full array is gigabytes; the
+     * dynamic-edge synthesizers only scan-and-filter, so they iterate to keep
+     * memory O(1) in the node count rather than O(nodes) (#610).
+     */
+    iterateNodesByKind(kind: NodeKind): IterableIterator<Node>;
     /**
      * Get all nodes in the database
      */
@@ -62,6 +202,11 @@ export declare class QueryBuilder {
      * Get nodes by exact name match (uses idx_nodes_name index)
      */
     getNodesByName(name: string): Node[];
+    /**
+     * Nodes whose name starts with `prefix`, by index range scan (a LIKE would
+     * skip idx_nodes_name under SQLite's default case-insensitive LIKE).
+     */
+    getNodesByNamePrefix(prefix: string, limit?: number): Node[];
     /**
      * Get nodes by exact qualified name match (uses idx_nodes_qualified_name index)
      */
@@ -151,6 +296,44 @@ export declare class QueryBuilder {
      */
     findEdgesBetweenNodes(nodeIds: string[], kinds?: EdgeKind[]): Edge[];
     /**
+     * Distinct file paths that DEPEND ON `filePath`: every file containing a
+     * symbol with a cross-file edge (any kind except `contains`) into a symbol
+     * of this file. This is the file-level projection of the symbol dependency
+     * graph and the basis for blast-radius / `affected` test selection.
+     *
+     * It deliberately does NOT restrict to `imports` edges. In this graph an
+     * `imports` edge connects a file to its own local import declarations
+     * (it is always same-file), so an imports-only lookup returns zero
+     * cross-file dependents for every file. The real cross-file dependency
+     * signal is the resolved call/reference graph — calls, references,
+     * instantiates, extends, implements, overrides, type_of, returns,
+     * decorates — exactly what {@link GraphTraverser.getImpactRadius} traverses.
+     * `contains` is excluded: a parent containing a symbol does not *depend* on
+     * it. One indexed query (idx_nodes_file_path + idx_edges_target_kind).
+     */
+    getDependentFilePaths(filePath: string): string[];
+    /**
+     * Distinct file paths that `filePath` DEPENDS ON — the inverse of
+     * {@link getDependentFilePaths}: every file containing a symbol that a
+     * symbol of this file has a cross-file edge into. Same edge-kind rules
+     * (all kinds except `contains`); same reason imports-only is insufficient.
+     */
+    getDependencyFilePaths(filePath: string): string[];
+    /**
+     * Cross-file edges whose TARGET is a node in `filePath` and whose SOURCE is a
+     * node in a *different* file, paired with the target node's (name, kind) so a
+     * caller can re-resolve the edge to the re-indexed target's new ID (node IDs
+     * are `sha256(filePath:kind:name:line)`, so any line shift in the callee file
+     * changes target IDs and a naive re-insert by old ID silently drops them).
+     * Used by `storeExtractionResult` to preserve incoming edges across a file
+     * re-index (issue #899). Same edge-kind rules as
+     * {@link getDependentFilePaths}: all kinds except `contains`.
+     */
+    getCrossFileIncomingEdgesWithTarget(filePath: string): Array<Edge & {
+        targetName: string;
+        targetKind: NodeKind;
+    }>;
+    /**
      * Insert or update a file record
      */
     upsertFile(file: FileRecord): void;
@@ -166,6 +349,11 @@ export declare class QueryBuilder {
      * Get all tracked files
      */
     getAllFiles(): FileRecord[];
+    /**
+     * Most recent index timestamp (ms since epoch) across all tracked files, or
+     * null when nothing is indexed yet. One indexed aggregate, no per-row scan. (#329)
+     */
+    getLastIndexedAt(): number | null;
     /**
      * Get files that need re-indexing (hash changed)
      */
@@ -229,6 +417,17 @@ export declare class QueryBuilder {
         referenceName: string;
         referenceKind: string;
     }>): void;
+    /**
+     * Lightweight (nodes, edges) count snapshot. Used around an index/sync
+     * run to compute true additions across extraction + resolution +
+     * synthesis — the per-phase counter in the orchestrator only sees
+     * extraction's contribution, which is why the CLI summary under-reported
+     * the edge count (resolution + synthesizer edges were invisible).
+     */
+    getNodeAndEdgeCount(): {
+        nodes: number;
+        edges: number;
+    };
     /**
      * Get graph statistics
      */

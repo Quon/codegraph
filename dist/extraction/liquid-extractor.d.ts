@@ -25,6 +25,13 @@ export declare class LiquidExtractor {
      */
     private createFileNode;
     /**
+     * Shopify OS 2.0 JSON template / section group. Both have a `sections` object
+     * mapping an id → `{ "type": "<section-name>", ... }`; the `type` names a
+     * `sections/<type>.liquid` file. Emit a `references` edge to each, so a section
+     * used only from a JSON template (the OS 2.0 norm) is no longer orphaned.
+     */
+    private extractShopifyJsonSections;
+    /**
      * Extract {% render 'snippet' %} and {% include 'snippet' %} references
      */
     private extractSnippetReferences;

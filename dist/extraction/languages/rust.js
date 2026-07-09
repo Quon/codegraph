@@ -2,10 +2,42 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.rustExtractor = void 0;
 const tree_sitter_helpers_1 = require("../tree-sitter-helpers");
+/**
+ * A Rust function's declared return type, normalized to the bare type a chained
+ * `Foo::new().bar()` could be called on (the #645/#608 mechanism). Reads the
+ * `return_type` field: `-> Self` yields the marker `self` (resolved to the impl's
+ * own type at resolution time, like PHP's `self`/`static`); a concrete `-> Foo` /
+ * `-> FooBuilder` its name; a reference (`&Foo`) is unwrapped; generics are reduced
+ * to the base type (`Vec<Foo>` → `Vec`); primitives / unit / tuple yield undefined.
+ * Stdlib types that aren't in the graph simply fail the later existence check.
+ */
+function extractRustReturnType(node, source) {
+    let rt = (0, tree_sitter_helpers_1.getChildByField)(node, 'return_type');
+    if (!rt)
+        return undefined;
+    if (rt.type === 'reference_type') {
+        rt =
+            rt.namedChildren.find((c) => c.type === 'type_identifier' ||
+                c.type === 'scoped_type_identifier' ||
+                c.type === 'generic_type') ?? rt;
+    }
+    if (!rt || rt.type === 'primitive_type' || rt.type === 'unit_type' || rt.type === 'tuple_type') {
+        return undefined;
+    }
+    const text = (0, tree_sitter_helpers_1.getNodeText)(rt, source).trim().replace(/<[^>]*>/g, '');
+    const last = text.split('::').pop()?.trim();
+    if (!last || !/^[A-Za-z_]\w*$/.test(last))
+        return undefined;
+    return last === 'Self' ? 'self' : last;
+}
 exports.rustExtractor = {
-    functionTypes: ['function_item'],
+    // `function_signature_item` is a trait method DECLARATION (`fn render(&self);`,
+    // no body). Extracting it makes a trait's method set first-class, which
+    // impl-navigation and trait-dispatch synthesis need (a struct's method set is
+    // matched against the trait's).
+    functionTypes: ['function_item', 'function_signature_item'],
     classTypes: [], // Rust has impl blocks
-    methodTypes: ['function_item'], // Methods are functions in impl blocks
+    methodTypes: ['function_item', 'function_signature_item'],
     interfaceTypes: ['trait_item'],
     structTypes: ['struct_item'],
     enumTypes: ['enum_item'],
@@ -19,6 +51,7 @@ exports.rustExtractor = {
     bodyField: 'body',
     paramsField: 'parameters',
     returnField: 'return_type',
+    getReturnType: extractRustReturnType,
     getSignature: (node, source) => {
         const params = (0, tree_sitter_helpers_1.getChildByField)(node, 'parameters');
         const returnType = (0, tree_sitter_helpers_1.getChildByField)(node, 'return_type');

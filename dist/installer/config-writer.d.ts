@@ -1,36 +1,28 @@
 /**
- * Config file writing for the CodeGraph installer
- * Writes to claude.json, settings.json, and CLAUDE.md
+ * Backwards-compat shim — original Claude-only writer functions.
+ *
+ * The installer now uses the multi-target architecture in
+ * `./targets/`. This file is preserved so existing imports (the test
+ * suite, downstream tooling) keep working unchanged. Each function
+ * delegates to the Claude target. New code should import the target
+ * registry from `./targets/registry` directly.
+ *
+ * @deprecated Use `targets/registry.ts` and the `AgentTarget`
+ *   abstraction instead.
  */
 export type InstallLocation = 'global' | 'local';
 /**
- * Write the MCP server configuration to claude.json
+ * Each shim calls ONLY the named per-file helper — writeMcpConfig
+ * writes only the MCP JSON, writePermissions only settings.json. The
+ * full multi-file install lives in `claudeTarget.install()` which the
+ * new orchestrator uses.
+ *
+ * There is no `writeClaudeMd` shim anymore: codegraph stopped writing a
+ * CLAUDE.md instructions block (issue #529) now that the MCP server's
+ * `initialize` instructions are the single source of truth.
  */
 export declare function writeMcpConfig(location: InstallLocation): void;
-/**
- * Write permissions to settings.json
- */
 export declare function writePermissions(location: InstallLocation): void;
-/**
- * Check if MCP config already exists for CodeGraph
- */
 export declare function hasMcpConfig(location: InstallLocation): boolean;
-/**
- * Check if permissions already exist for CodeGraph
- */
 export declare function hasPermissions(location: InstallLocation): boolean;
-/**
- * Check if CLAUDE.md has CodeGraph section
- */
-export declare function hasClaudeMdSection(location: InstallLocation): boolean;
-/**
- * Write or update CLAUDE.md with CodeGraph instructions
- *
- * If the file exists and has a CodeGraph section (marked or unmarked),
- * it will be replaced. Otherwise, the template is appended.
- */
-export declare function writeClaudeMd(location: InstallLocation): {
-    created: boolean;
-    updated: boolean;
-};
 //# sourceMappingURL=config-writer.d.ts.map

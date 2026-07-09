@@ -17,6 +17,17 @@ exports.pascalExtractor = {
     bodyField: 'body',
     paramsField: 'args',
     returnField: 'type',
+    // Pascal/Delphi `function GetInstance: TBar` — the return type is a `typeref`
+    // child. Capture its bare class name for the chained static-factory call
+    // mechanism (#750). A procedure (no return) has no typeref → undefined.
+    getReturnType: (node, source) => {
+        const typeref = node.namedChildren.find((c) => c.type === 'typeref');
+        if (!typeref)
+            return undefined;
+        const id = typeref.namedChildren.find((c) => c.type === 'identifier') ?? typeref;
+        const name = (0, tree_sitter_helpers_1.getNodeText)(id, source).trim();
+        return /^[A-Za-z_]\w*$/.test(name) ? name : undefined;
+    },
     getSignature: (node, source) => {
         const args = (0, tree_sitter_helpers_1.getChildByField)(node, 'args');
         const returnType = node.namedChildren.find((c) => c.type === 'typeref');

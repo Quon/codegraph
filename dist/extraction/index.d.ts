@@ -4,8 +4,9 @@
  * Coordinates file scanning, parsing, and database storage.
  */
 import * as fs from 'fs';
-import { ExtractionResult, ExtractionError, CodeGraphConfig } from '../types';
+import { ExtractionResult, ExtractionError } from '../types';
 import { QueryBuilder } from '../db/queries';
+import { Ignore } from 'ignore';
 /**
  * Progress callback for indexing operations
  */
@@ -23,6 +24,14 @@ export interface IndexResult {
     filesIndexed: number;
     filesSkipped: number;
     filesErrored: number;
+    /**
+     * How many indexable files the scan discovered — the ground truth the
+     * indexed/skipped/errored tallies must add up to. A shortfall means files
+     * were silently dropped mid-pipeline (e.g. a killed worker under load) and
+     * the index is PARTIAL; callers surface that rather than trusting the
+     * counts. Only set by full-index runs (indexAll), not indexFiles/sync.
+     */
+    filesDiscovered?: number;
     nodesCreated: number;
     edgesCreated: number;
     errors: ExtractionError[];
@@ -45,28 +54,117 @@ export interface SyncResult {
  */
 export declare function hashContent(content: string): string;
 /**
- * Check if a file should be included based on config
+ * An `ignore` matcher seeded with the built-in defaults, merged with the project's
+ * root .gitignore so a negation there (e.g. `!vendor/`) overrides a default. Shared
+ * by both enumeration paths so behavior is identical with or without git — and so
+ * the defaults apply to tracked files too (committing a dependency dir doesn't make
+ * it project code; the explicit `.gitignore` negation is the only opt-in).
  */
-export declare function shouldIncludeFile(filePath: string, config: CodeGraphConfig): boolean;
+export declare function buildDefaultIgnore(rootDir: string): Ignore;
 /**
- * Recursively scan directory for source files.
+ * Workspace-scope ignore matcher. Ordinary paths get the root's matcher
+ * (built-in defaults + root `.gitignore`); paths inside an EMBEDDED repo get
+ * that repo's own matcher (defaults + its root `.gitignore`) — the parent's
+ * `.gitignore` hides a child repo from git, not from the index (#514). A
+ * directory path (trailing slash) that is an ANCESTOR of an embedded root is
+ * never ignored, so directory-pruning callers (the Linux per-directory
+ * watcher) still descend to reach the embedded repos.
  *
- * In git repos, uses `git ls-files` to get the file list (inherently
- * respects .gitignore at all levels), then filters by config include patterns.
- * Falls back to filesystem walk for non-git projects.
+ * Single source of truth for indexer and watcher scope — they must not diverge.
  */
-export declare function scanDirectory(rootDir: string, config: CodeGraphConfig, onProgress?: (current: number, file: string) => void): string[];
+export declare class ScopeIgnore {
+    private rootMatcher;
+    /**
+     * Project `codegraph.json` `exclude` patterns (#999), matched against the
+     * full root-relative path. Wins over everything else — an explicit user
+     * exclude applies even to tracked files and even inside embedded repos.
+     */
+    private exclude;
+    /**
+     * Project `codegraph.json` `include` patterns — first-party source forced
+     * INTO the index despite `.gitignore`. When a path matches, it is NOT
+     * ignored (so the watcher watches it), overriding `.gitignore`/`rootMatcher`
+     * — but never `exclude` (checked first) and never a built-in default-ignored
+     * dir. `includeRoots` are the static prefixes so a gitignored ANCESTOR
+     * directory of an included subtree still isn't pruned by the directory
+     * walker/watcher.
+     */
+    private include;
+    private includeRoots;
+    private embedded;
+    private defaults;
+    constructor(rootMatcher: Ignore, embedded: Array<{
+        root: string;
+        matcher: Ignore;
+    }>, 
+    /**
+     * Project `codegraph.json` `exclude` patterns (#999), matched against the
+     * full root-relative path. Wins over everything else — an explicit user
+     * exclude applies even to tracked files and even inside embedded repos.
+     */
+    exclude?: Ignore | null, 
+    /**
+     * Project `codegraph.json` `include` patterns — first-party source forced
+     * INTO the index despite `.gitignore`. When a path matches, it is NOT
+     * ignored (so the watcher watches it), overriding `.gitignore`/`rootMatcher`
+     * — but never `exclude` (checked first) and never a built-in default-ignored
+     * dir. `includeRoots` are the static prefixes so a gitignored ANCESTOR
+     * directory of an included subtree still isn't pruned by the directory
+     * walker/watcher.
+     */
+    include?: Ignore | null, includeRoots?: string[]);
+    ignores(rel: string): boolean;
+}
+/**
+ * Build the workspace-scope matcher. When the caller already knows the
+ * embedded roots (the scanner discovers them during collection), pass them to
+ * skip rediscovery; otherwise they're discovered here (the watcher path).
+ */
+export declare function buildScopeIgnore(rootDir: string, embeddedRoots?: Iterable<string>): ScopeIgnore;
+/**
+ * Standalone discovery of every embedded repo root under `rootDir` (relative,
+ * trailing-slashed) — the untracked kind (#193) always, and the gitignored kind
+ * (#514) only for directories the project opted in via `codegraph.json`
+ * `includeIgnored` (#622, #699); otherwise `.gitignore` is respected and they
+ * are not discovered (#970, #976). Recursive (an embedded repo can embed further
+ * repos). Returns [] for non-git roots: the filesystem walk handles nested repos
+ * there already.
+ */
+export declare function discoverEmbeddedRepoRoots(rootDir: string): string[];
+/**
+ * The INVERSE of the gitignored side of {@link discoverEmbeddedRepoRoots}:
+ * nested git repositories under a gitignored directory that the project has NOT
+ * opted into via `codegraph.json` `includeIgnored`. These are real repos the
+ * default `init`/`index` deliberately skips because `.gitignore` excludes them
+ * (#970, #976) — most visibly the "super-repo `.gitignore`s its child repos"
+ * layout (#1156), where `init` at the parent correctly indexes ~nothing while
+ * `init` inside each child works. The CLI uses this to turn that silent empty
+ * index into an actionable hint: it names the skipped repos and offers to opt
+ * them in. Paths are `rootDir`-relative and trailing-slashed (valid
+ * `includeIgnored` patterns as-is). Returns `[]` for a non-git root (a
+ * filesystem walk already descends into nested repos there), skips built-in
+ * default-ignored dirs (`node_modules`, …), and is bounded so it never stalls
+ * on a giant ignored tree.
+ */
+export declare function findUnindexedIgnoredRepos(rootDir: string): string[];
+/**
+ * Recursively scan a directory for source files.
+ *
+ * In git repos, uses `git ls-files` (inherently respects .gitignore at all
+ * levels), then keeps files with a supported source extension. For non-git
+ * projects, falls back to a filesystem walk that parses .gitignore itself.
+ */
+export declare function scanDirectory(rootDir: string, onProgress?: (current: number, file: string) => void): string[];
 /**
  * Async variant of scanDirectory that yields to the event loop periodically,
  * allowing worker threads to receive and render progress messages.
  */
-export declare function scanDirectoryAsync(rootDir: string, config: CodeGraphConfig, onProgress?: (current: number, file: string) => void): Promise<string[]>;
+export declare function scanDirectoryAsync(rootDir: string, onProgress?: (current: number, file: string) => void): Promise<string[]>;
 /**
  * Extraction orchestrator
  */
 export declare class ExtractionOrchestrator {
     private rootDir;
-    private config;
     private queries;
     /**
      * Names of frameworks detected for this project, populated by indexAll().
@@ -75,7 +173,7 @@ export declare class ExtractionOrchestrator {
      * hasn't run yet so single-file re-index paths can detect on the spot.
      */
     private detectedFrameworkNames;
-    constructor(rootDir: string, config: CodeGraphConfig, queries: QueryBuilder);
+    constructor(rootDir: string, queries: QueryBuilder);
     /**
      * Build a filesystem-backed ResolutionContext sufficient for framework
      * detection. Graph-query methods (getNodesByName etc.) return empty because
@@ -111,8 +209,12 @@ export declare class ExtractionOrchestrator {
      */
     private storeExtractionResult;
     /**
-     * Sync with current file state.
-     * Uses git status as a fast path when available, falling back to full scan.
+     * Sync the index with the current file state.
+     *
+     * Change detection is filesystem-based, never git: a (size, mtime) stat
+     * pre-filter skips unchanged files, then a content-hash compare confirms real
+     * changes. This works in non-git projects and catches committed changes from
+     * `git pull`/`checkout`/`merge`/`rebase` that `git status` cannot see.
      */
     sync(onProgress?: (progress: IndexProgress) => void): Promise<SyncResult>;
     /**
@@ -126,5 +228,5 @@ export declare class ExtractionOrchestrator {
     };
 }
 export { extractFromSource } from './tree-sitter';
-export { detectLanguage, isLanguageSupported, isGrammarLoaded, getSupportedLanguages, initGrammars, loadGrammarsForLanguages, loadAllGrammars } from './grammars';
+export { detectLanguage, isSourceFile, isLanguageSupported, isGrammarLoaded, getSupportedLanguages, initGrammars, loadGrammarsForLanguages, loadAllGrammars } from './grammars';
 //# sourceMappingURL=index.d.ts.map

@@ -2,6 +2,48 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.kotlinExtractor = void 0;
 const tree_sitter_helpers_1 = require("../tree-sitter-helpers");
+/** Kotlin return types that can't be a chained-call receiver (no class to chain on). */
+const KOTLIN_NON_CLASS_RETURN = new Set(['Unit', 'Nothing']);
+/**
+ * A Kotlin function's declared return type, normalized to the bare class name a
+ * chained `Foo.getInstance().bar()` could be called on (the #645/#608 mechanism).
+ * tree-sitter-kotlin exposes no field names, so the return type is found
+ * positionally: the first `user_type` / `nullable_type` that FOLLOWS
+ * `function_value_parameters` (an extension receiver's type sits before the
+ * params, so it's never mistaken for the return). An inferred return (expression
+ * body with no `: Type`), a lambda return type, or `Unit` / `Nothing` → undefined.
+ */
+function extractKotlinReturnType(node, source) {
+    let seenParams = false;
+    for (let i = 0; i < node.namedChildCount; i++) {
+        const child = node.namedChild(i);
+        if (!child)
+            continue;
+        if (child.type === 'function_value_parameters') {
+            seenParams = true;
+            continue;
+        }
+        if (!seenParams)
+            continue;
+        // The return type is the type node right after the params. If we reach the
+        // body or a `where`-clause first, there's no declared return type.
+        if (child.type === 'function_body' || child.type === 'type_constraints')
+            return undefined;
+        if (child.type === 'user_type' || child.type === 'nullable_type') {
+            const ut = child.type === 'nullable_type'
+                ? (child.namedChildren.find((c) => c.type === 'user_type') ?? child)
+                : child;
+            const typeId = ut.namedChildren.find((c) => c.type === 'type_identifier');
+            const name = (0, tree_sitter_helpers_1.getNodeText)(typeId ?? ut, source).trim();
+            if (!name || !/^[A-Za-z_]\w*$/.test(name))
+                return undefined;
+            if (KOTLIN_NON_CLASS_RETURN.has(name))
+                return undefined;
+            return name;
+        }
+    }
+    return undefined;
+}
 /** Check if a node matches the `fun interface` misparse pattern */
 function isFunInterfaceNode(node) {
     let hasFun = false;
@@ -48,6 +90,57 @@ exports.kotlinExtractor = {
     nameField: 'simple_identifier',
     bodyField: 'function_body',
     visitNode: (node, ctx) => {
+        // Kotlin properties (`val` / `var` / `const val`). The name nests as
+        // property_declaration → variable_declaration → simple_identifier, which the
+        // generic variable/field path can't read — so nothing was extracted before.
+        // Kind by enclosing scope: a singleton `object` / `companion object` (and a
+        // top-level property) holds *shared* values — `val`→`constant`,
+        // `var`→`variable` (the Scala-object rule; a `const val` is a `val`). A
+        // `class`/`interface`/`enum` instance `val`/`var` is per-instance state →
+        // `field` (never a value-ref target, like a Java instance `final`). A
+        // property inside a function body / `init` block / lambda is a local and is
+        // skipped entirely.
+        if (node.type === 'property_declaration') {
+            const varDecl = node.namedChildren.find((c) => c.type === 'variable_declaration');
+            const nameNode = varDecl?.namedChildren.find((c) => c.type === 'simple_identifier');
+            if (!nameNode)
+                return false; // destructuring `val (a,b)` etc. — leave to default
+            const name = (0, tree_sitter_helpers_1.getNodeText)(nameNode, ctx.source);
+            if (!name)
+                return false;
+            // Walk to the nearest enclosing definition: a function body / init / lambda
+            // means it's a local; `object`/`companion object` is a constant scope; a
+            // `class_declaration` (covers class/interface/enum) is an instance scope.
+            let scope = 'const';
+            for (let p = node.parent; p; p = p.parent) {
+                const pt = p.type;
+                if (pt === 'function_body' || pt === 'function_declaration' ||
+                    pt === 'lambda_literal' || pt === 'anonymous_initializer' ||
+                    pt === 'control_structure_body' || pt === 'getter' || pt === 'setter') {
+                    scope = 'local';
+                    break;
+                }
+                if (pt === 'companion_object' || pt === 'object_declaration') {
+                    scope = 'const';
+                    break;
+                }
+                if (pt === 'class_declaration') {
+                    scope = 'instance';
+                    break;
+                }
+            }
+            if (scope === 'local')
+                return true; // a local — don't extract
+            const binding = node.namedChildren.find((c) => c.type === 'binding_pattern_kind');
+            const isVal = binding != null && (0, tree_sitter_helpers_1.getNodeText)(binding, ctx.source) === 'val';
+            const kind = scope === 'instance' ? 'field' : isVal ? 'constant' : 'variable';
+            const typeNode = node.childForFieldName('type');
+            const sig = typeNode
+                ? `${isVal ? 'val' : 'var'} ${name}: ${(0, tree_sitter_helpers_1.getNodeText)(typeNode, ctx.source)}`
+                : undefined;
+            ctx.createNode(kind, name, node, { signature: sig });
+            return true;
+        }
         // Handle Kotlin `fun interface` declarations.
         // Tree-sitter-kotlin doesn't support `fun interface` syntax (Kotlin 1.4+).
         // It produces two different misparse patterns:
@@ -133,6 +226,7 @@ exports.kotlinExtractor = {
     },
     paramsField: 'function_value_parameters',
     returnField: 'type',
+    getReturnType: extractKotlinReturnType,
     resolveBody: (node, _bodyField) => {
         // Kotlin's tree-sitter grammar doesn't use field names, so getChildByField fails.
         // Find body by type: function_body for functions/methods, class_body for classes,
@@ -241,6 +335,32 @@ exports.kotlinExtractor = {
         }
         return false;
     },
+    extractModifiers: (node) => {
+        // Kotlin Multiplatform `expect`/`actual` markers live in
+        //   modifiers > platform_modifier > (expect | actual)
+        // Capturing them lets the resolver link an `expect` declaration in a
+        // common source set to its `actual` implementations in platform source
+        // sets (those impls otherwise have zero dependents — the caller resolves
+        // to the `expect`). Match the AST node, not raw text, so an annotation
+        // argument or identifier named "actual" can't false-positive.
+        const mods = [];
+        for (let i = 0; i < node.childCount; i++) {
+            const child = node.child(i);
+            if (child?.type !== 'modifiers')
+                continue;
+            for (let j = 0; j < child.childCount; j++) {
+                const pm = child.child(j);
+                if (pm?.type !== 'platform_modifier')
+                    continue;
+                for (let k = 0; k < pm.childCount; k++) {
+                    const kw = pm.child(k);
+                    if (kw && (kw.type === 'expect' || kw.type === 'actual'))
+                        mods.push(kw.type);
+                }
+            }
+        }
+        return mods.length > 0 ? mods : undefined;
+    },
     extractImport: (node, source) => {
         const importText = source.substring(node.startIndex, node.endIndex).trim();
         const identifier = node.namedChildren.find((c) => c.type === 'identifier');
@@ -248,6 +368,12 @@ exports.kotlinExtractor = {
             return { moduleName: source.substring(identifier.startIndex, identifier.endIndex), signature: importText };
         }
         return null;
+    },
+    packageTypes: ['package_header'],
+    extractPackage: (node, source) => {
+        // package_header → identifier (dotted: `com.example.foo`)
+        const id = node.namedChildren.find((c) => c.type === 'identifier');
+        return id ? source.substring(id.startIndex, id.endIndex).trim() : null;
     },
 };
 //# sourceMappingURL=kotlin.js.map

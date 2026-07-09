@@ -300,13 +300,38 @@ exports.vaporResolver = {
         const references = [];
         const now = Date.now();
         const safe = (0, strip_comments_1.stripCommentsForRegex)(content, 'swift');
-        // Vapor: (app|router|routes).METHOD("path", use: handler)
-        const routeRegex = /\b(?:app|router|routes)\.(get|post|put|patch|delete)\s*\(\s*"([^"]+)"\s*,\s*use:\s*([A-Za-z_][A-Za-z0-9_.]*)/g;
+        // Build a group-var → path-prefix map first. Modern Vapor routes live on a
+        // grouped builder (`let todos = routes.grouped("todos"); todos.get(use: index)`
+        // or `routes.group("todos") { todos in todos.get(use: index) }`), so the path
+        // comes from the group, not the call. Roots (app/routes/router) have no prefix.
+        const groupPrefix = new Map();
+        const segJoin = (existing, segsStr) => {
+            const segs = (segsStr.match(/"([^"]*)"/g) || []).map((s) => s.slice(1, -1));
+            return existing + segs.map((s) => '/' + s).join('');
+        };
+        let gm;
+        // let X = Y.grouped("a", "b")
+        const groupedRegex = /\blet\s+(\w+)\s*=\s*(\w+)\.grouped\s*\(([^)]*)\)/g;
+        while ((gm = groupedRegex.exec(safe)) !== null) {
+            groupPrefix.set(gm[1], segJoin(groupPrefix.get(gm[2]) ?? '', gm[3]));
+        }
+        // Y.group("a") { X in ... }
+        const groupClosureRegex = /\b(\w+)\.group\s*\(([^)]*)\)\s*\{\s*(\w+)\s+in/g;
+        while ((gm = groupClosureRegex.exec(safe)) !== null) {
+            groupPrefix.set(gm[3], segJoin(groupPrefix.get(gm[1]) ?? '', gm[2]));
+        }
+        // Vapor: <builder>.METHOD([path segs,] use: handler). Any receiver (app,
+        // routes, or a grouped var); path segments optional and may be non-string
+        // (`BlogUser.parameter`, `:id`, a path constant) so accept any comma-separated
+        // args before `use:` — the label keeps only the string parts. `use:`
+        // discriminates a real route from Environment.get("X")/req.parameters.get("X").
+        const routeRegex = /\b(\w+)\.(get|post|put|patch|delete|head|options)\s*\(\s*((?:[^,()]+,\s*)*)use:\s*([A-Za-z_][\w.]*)/g;
         let match;
         while ((match = routeRegex.exec(safe)) !== null) {
-            const [, method, routePath, handlerExpr] = match;
+            const [, receiver, method, segsStr, handlerExpr] = match;
             const line = safe.slice(0, match.index).split('\n').length;
             const upper = method.toUpperCase();
+            const routePath = (groupPrefix.get(receiver) ?? '') + segJoin('', segsStr) || '/';
             const routeNode = {
                 id: `route:${filePath}:${line}:${upper}:${routePath}`,
                 kind: 'route',
@@ -321,9 +346,8 @@ exports.vaporResolver = {
                 updatedAt: now,
             };
             nodes.push(routeNode);
-            // Last segment of dotted path (e.g. UserController.list -> list)
-            const parts = handlerExpr.split('.');
-            const handlerName = parts[parts.length - 1];
+            // Last segment of a dotted handler (self.list / UserController.list -> list)
+            const handlerName = handlerExpr.split('.').pop();
             if (handlerName) {
                 references.push({
                     fromNodeId: routeNode.id,

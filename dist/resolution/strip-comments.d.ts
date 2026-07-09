@@ -22,6 +22,6 @@
  * `path(...)`, `Route::get(...)`, `app.get(...)` style patterns that
  * framework extractors scan for.
  */
-export type CommentLang = 'python' | 'javascript' | 'typescript' | 'php' | 'ruby' | 'java' | 'csharp' | 'swift' | 'go' | 'rust';
+export type CommentLang = 'python' | 'javascript' | 'typescript' | 'php' | 'ruby' | 'java' | 'csharp' | 'swift' | 'go' | 'rust' | 'c' | 'cpp' | 'erlang';
 export declare function stripCommentsForRegex(content: string, lang: CommentLang): string;
 //# sourceMappingURL=strip-comments.d.ts.map

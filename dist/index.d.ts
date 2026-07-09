@@ -4,13 +4,13 @@
  * A local-first code intelligence system that builds a semantic
  * knowledge graph from any codebase.
  */
-import { CodeGraphConfig, Node, Edge, FileRecord, ExtractionResult, Subgraph, TraversalOptions, SearchOptions, SearchResult, Context, GraphStats, TaskInput, TaskContext, BuildContextOptions, FindRelevantContextOptions } from './types';
+import { Node, Edge, FileRecord, ExtractionResult, Subgraph, TraversalOptions, SearchOptions, SearchResult, SegmentMatch, Context, GraphStats, TaskInput, TaskContext, BuildContextOptions, FindRelevantContextOptions } from './types';
 import { IndexProgress, IndexResult, SyncResult } from './extraction';
 import { ResolutionResult } from './resolution';
-import { WatchOptions } from './sync';
+import { WatchOptions, PendingFile } from './sync';
 export * from './types';
-export { getDatabasePath } from './db';
-export { getConfigPath } from './config';
+export { getDatabasePath, DatabaseConnection } from './db';
+export { QueryBuilder } from './db/queries';
 export { getCodeGraphDir, isInitialized, findNearestCodeGraphRoot, CODEGRAPH_DIR, } from './directory';
 export { PROJECTS_FILENAME, ProjectEntry, getProjectsPath, loadProjectEntries, loadProjects, saveProjects, addProject, removeProject, scanForProjects, syncProjects, findNearestMonorepoRoot, } from './projects';
 export { IndexProgress, IndexResult, SyncResult } from './extraction';
@@ -18,14 +18,12 @@ export { detectLanguage, isLanguageSupported, isGrammarLoaded, getSupportedLangu
 export { ResolutionResult } from './resolution';
 export { CodeGraphError, FileError, ParseError, DatabaseError, SearchError, VectorError, ConfigError, Logger, setLogger, getLogger, silentLogger, defaultLogger, } from './errors';
 export { Mutex, FileLock, processInBatches, debounce, throttle, MemoryMonitor } from './utils';
-export { FileWatcher, WatchOptions } from './sync';
+export { FileWatcher, WatchOptions, PendingFile, LockUnavailableError } from './sync';
 export { MCPServer } from './mcp';
 /**
  * Options for initializing a new CodeGraph project
  */
 export interface InitOptions {
-    /** Custom configuration overrides */
-    config?: Partial<CodeGraphConfig>;
     /** Whether to run initial indexing after init */
     index?: boolean;
     /** Progress callback for indexing */
@@ -59,7 +57,6 @@ export interface IndexOptions {
 export declare class CodeGraph {
     private db;
     private queries;
-    private config;
     private projectRoot;
     private orchestrator;
     private resolver;
@@ -70,6 +67,28 @@ export declare class CodeGraph {
     private fileLock;
     private watcher;
     private constructor();
+    /**
+     * (Re)build the query/extraction/graph layers over the current `this.queries`
+     * (which wraps `this.db`). Factored out of the constructor so `reopenIfReplaced`
+     * can rebuild them against a fresh connection without duplicating the wiring.
+     * The path-based `fileLock` is independent of the DB handle, so it stays put.
+     */
+    private wireLayers;
+    /**
+     * Heal a stale database handle in place. If `.codegraph/` was removed and
+     * recreated at the SAME path while this instance held the DB open — a git
+     * worktree removed and re-added, or `rm -rf .codegraph` + `codegraph init` —
+     * our open fd points at the now-unlinked inode and can never see the new
+     * index, so every query returns the pre-removal snapshot until the process
+     * restarts (#925). When that's detected, open the live file at the same path,
+     * rebuild the query layers, and swap them IN PLACE, so every holder of this
+     * instance (the MCP daemon's default project, cached projectPath connections)
+     * heals without a restart. Returns true iff it reopened.
+     *
+     * POSIX-only in practice: `isReplacedOnDisk` never fires on Windows (an open
+     * file can't be unlinked there, and st_ino is unreliable).
+     */
+    reopenIfReplaced(): boolean;
     /**
      * Initialize a new CodeGraph project
      *
@@ -83,7 +102,7 @@ export declare class CodeGraph {
     /**
      * Initialize synchronously (without indexing)
      */
-    static initSync(projectRoot: string, options?: Omit<InitOptions, 'index' | 'onProgress'>): CodeGraph;
+    static initSync(projectRoot: string): CodeGraph;
     /**
      * Open an existing CodeGraph project
      *
@@ -92,6 +111,23 @@ export declare class CodeGraph {
      * @returns A CodeGraph instance
      */
     static open(projectRoot: string, options?: OpenOptions): Promise<CodeGraph>;
+    /**
+     * Rebuild the project's database from scratch and return a fresh, empty
+     * instance — the "same result as a fresh init" semantics that `codegraph
+     * index` documents.
+     *
+     * Unlike `open()` followed by `clear()`, this DISCARDS the existing
+     * `.codegraph/codegraph.db` (and its `-wal`/`-shm` sidecars) before
+     * re-initializing, instead of opening the old database and DELETE-ing every
+     * row. On a large or pre-fix poisoned index — e.g. an old graph that scanned
+     * an ignored gitlink corpus (#1065) into ~1.6M nodes with a multi-GB WAL —
+     * the per-row `nodes_fts` delete-trigger churn blocks the main thread long
+     * enough to trip the #850 liveness watchdog before indexing even starts, so a
+     * full re-index could never recover the bad state (#1067). Discarding the
+     * files is O(1) regardless of size, reclaims the disk, and sidesteps opening
+     * (and running migrations against) the poisoned database entirely.
+     */
+    static recreate(projectRoot: string): Promise<CodeGraph>;
     /**
      * Open synchronously (without sync)
      */
@@ -104,14 +140,6 @@ export declare class CodeGraph {
      * Close the CodeGraph instance and release resources
      */
     close(): void;
-    /**
-     * Get the current configuration
-     */
-    getConfig(): CodeGraphConfig;
-    /**
-     * Update configuration
-     */
-    updateConfig(updates: Partial<CodeGraphConfig>): void;
     /**
      * Get the project root directory
      */
@@ -157,6 +185,36 @@ export declare class CodeGraph {
      */
     isWatching(): boolean;
     /**
+     * True once live watching has permanently degraded (OS watch-resource
+     * exhaustion, or a write lock held past the retry budget) and auto-sync is
+     * disabled until the next {@link watch} call. Distinct from `!isWatching()`:
+     * a stopped/never-started watcher is inactive but NOT degraded. MCP tools use
+     * this to surface a whole-index "results may be stale" notice, since
+     * `getPendingFiles()` goes empty once watching stops (#876).
+     */
+    isWatcherDegraded(): boolean;
+    /** The reason live watching degraded, or null if it is healthy (#876). */
+    getWatcherDegradedReason(): string | null;
+    /**
+     * Files seen by the file watcher since the last successful sync —
+     * the per-file "stale" signal MCP tools attach to responses so an agent
+     * can fall back to {@link Read} for just the affected file without
+     * waiting for a debounced sync to complete (issue #403).
+     *
+     * Returns an empty list when the watcher isn't active, or no events have
+     * arrived. Each entry includes `firstSeenMs` and `lastSeenMs` (wall-clock
+     * `Date.now()` values) so callers can render "edited Nms ago", plus an
+     * `indexing` flag indicating whether the in-flight sync (if any) will
+     * absorb that file.
+     */
+    getPendingFiles(): PendingFile[];
+    /**
+     * Resolves once the file watcher has installed its watch set. Useful for
+     * tests that need a deterministic boundary before asserting on
+     * `getPendingFiles()`. Resolves immediately when no watcher is active.
+     */
+    waitUntilWatcherReady(timeoutMs?: number): Promise<void>;
+    /**
      * Get files that have changed since last index
      */
     getChangedFiles(): {
@@ -164,6 +222,40 @@ export declare class CodeGraph {
         modified: string[];
         removed: string[];
     };
+    /**
+     * Most recent index timestamp (ms since epoch) across all tracked files, or
+     * null when nothing is indexed yet. Lets library consumers check index
+     * freshness without shelling out to `codegraph status --json`. (#329)
+     */
+    getLastIndexedAt(): number | null;
+    /**
+     * Completeness of the last full index run. `'complete'` is the only good
+     * state. `'indexing'` after the fact means a run was killed mid-index (OOM,
+     * SIGKILL, liveness watchdog) and the on-disk index is truncated;
+     * `'partial'` means the run finished but silently dropped files
+     * (discovered > indexed+skipped+errored); `'failed'` means it reported
+     * failure. `null` = index predates this marker. Surfaced by
+     * `codegraph status`.
+     */
+    getIndexState(): 'indexing' | 'complete' | 'partial' | 'failed' | null;
+    /**
+     * Which engine built the current index: the package version + extraction
+     * version stamped at the last full `indexAll`. Either field is null for an
+     * index built before stamping existed (treated as stale). See
+     * `extraction-version.ts` and `isIndexStale()`.
+     */
+    getIndexBuildInfo(): {
+        version: string | null;
+        extractionVersion: number | null;
+    };
+    /**
+     * True when the on-disk index was built by an engine whose extraction is
+     * older than the one now running — i.e. a re-index would add data a migration
+     * can't backfill. False when there's no index yet (nothing to refresh) or the
+     * stamp is current. This is the signal behind `codegraph status`'s re-index
+     * hint and `codegraph upgrade`'s reminder.
+     */
+    isIndexStale(): boolean;
     /**
      * Extract nodes and edges from source code (without storing)
      */
@@ -184,6 +276,13 @@ export declare class CodeGraph {
      */
     resolveReferencesBatched(onProgress?: (current: number, total: number) => void): Promise<ResolutionResult>;
     /**
+     * References extracted but not yet resolved into edges. Zero on a healthy
+     * index — a completed resolution pass consumes every row. Non-zero at rest
+     * means a pass was interrupted mid-run (killed indexer, crash — #1187), so
+     * some files' call edges are missing; the next `sync` sweeps them.
+     */
+    getPendingReferenceCount(): number;
+    /**
      * Get detected frameworks in the project
      */
     getDetectedFrameworks(): string[];
@@ -196,12 +295,18 @@ export declare class CodeGraph {
      */
     getStats(): GraphStats;
     /**
-     * Active SQLite backend for this project's connection. `wasm` means
-     * the native better-sqlite3 install failed and the WASM fallback is
-     * serving requests at 5-10x the latency. Surfaced via `codegraph
-     * status` and the `codegraph_status` MCP tool.
+     * Active SQLite backend for this project's connection (`node-sqlite` — Node's
+     * built-in real-SQLite module). Surfaced via `codegraph status` and the
+     * `codegraph_status` MCP tool alongside the effective journal mode.
      */
     getBackend(): import('./db').SqliteBackend;
+    /**
+     * The journal mode actually in effect ('wal', 'delete', …). 'wal' means
+     * readers never block on a concurrent writer; anything else means they can,
+     * which is the precondition for the "database is locked" failures in issue
+     * #238. Surfaced via `codegraph status` and the `codegraph_status` MCP tool.
+     */
+    getJournalMode(): string;
     /**
      * Get a node by ID
      */
@@ -215,9 +320,99 @@ export declare class CodeGraph {
      */
     getNodesByKind(kind: Node['kind']): Node[];
     /**
+     * Get ALL nodes with an exact name (direct index lookup, not FTS-ranked/capped).
+     * Used to enumerate every overload of a heavily-overloaded name so the specific
+     * definition the caller wants is never dropped below a search cut.
+     */
+    getNodesByName(name: string): Node[];
+    /** Nodes whose name starts with `prefix` (index range scan, capped). */
+    getNodesByNamePrefix(prefix: string, limit?: number): Node[];
+    /**
      * Search nodes by text
      */
     searchNodes(query: string, options?: SearchOptions): SearchResult[];
+    /**
+     * Graph-derived prompt matching for the front-load hook's MEDIUM tier:
+     * which indexed symbols do these prose words name? "state machine des
+     * commandes" → `OrderStateMachine`, in any human language whose technical
+     * nouns are Latin script — no keyword list involved.
+     *
+     * Precision comes from the repo's own naming statistics, not vocabulary:
+     * - CO-OCCURRENCE: ≥2 words that are segments of the SAME name ("state" +
+     *   "machine" → OrderStateMachine) is strong evidence and always qualifies.
+     * - RARITY: a single matched word qualifies only when its segment is
+     *   discriminative here (≤ {@link SEGMENT_RARITY_CEILING} distinct names) —
+     *   "checkout" in a shop backend yes, "state" in a react app no.
+     * Every candidate is re-verified against `nodes` before being returned
+     * (vocab rows are proposals; deletions leave orphans by design), so a
+     * returned symbol is guaranteed to exist right now.
+     */
+    getSegmentMatches(words: string[], limit?: number): SegmentMatch[];
+    /** A single word ("state") can match hundreds of names in a big repo — that
+     *  is noise, not signal. Ceiling for the single-word tier; co-occurrence is
+     *  exempt because two words on one name is already discriminative. */
+    private static readonly SEGMENT_RARITY_CEILING;
+    /** Which of the prompt's original words match `name`'s segments (via
+     *  variants). Segments are recomputed in JS — a name-keyed vocab lookup
+     *  would scan the (segment, name) primary key. */
+    private wordsMatchingName;
+    /**
+     * One-shot upgrade heal for callers that open the graph WITHOUT syncing —
+     * concretely the prompt hook, whose MEDIUM tier reads the segment
+     * vocabulary: a database migrated from before the vocab table existed
+     * starts with it empty, and the only other backfill lives inside `sync()`,
+     * which such callers never run (#1142). Returns true when the vocab is
+     * usable (already populated — the overwhelmingly common one-SELECT case —
+     * or healed here); false when it isn't (empty graph, or another process
+     * holds the index lock — that process's own sync heals it).
+     */
+    healSegmentVocabIfEmpty(): Promise<boolean>;
+    /**
+     * Rebuild the segment vocabulary from the current graph, batched and
+     * yielding — the upgrade-heal path for indexes built before the vocab table
+     * existed. Runs inside the index mutex/lock (sync and
+     * healSegmentVocabIfEmpty hold them).
+     */
+    private rebuildNameSegmentVocab;
+    /**
+     * Normalized project-name tokens (go.mod / package.json / repo dir) used to
+     * down-weight the non-discriminative project name in search ranking (#720).
+     * Exposed so explore can exclude it from the PascalCase type-disambiguation
+     * bias, which would otherwise pull overloaded tokens toward whichever stack
+     * embeds the project name.
+     */
+    getProjectNameTokens(): Set<string>;
+    /**
+     * Find the project's "primary route file" — the file with the densest
+     * concentration of framework-emitted `route` nodes (≥3 routes, ≥30%
+     * of all non-test routes). Used to inline the routing config in
+     * `codegraph_explore` responses on small realworld template repos
+     * (rails-realworld, laravel-realworld, drupal-admintoolbar, …) where
+     * Glob+Read of `routes.rb`/`urls.py`/etc. otherwise beats codegraph.
+     */
+    getTopRouteFile(): {
+        filePath: string;
+        routeCount: number;
+        totalRoutes: number;
+    } | null;
+    /**
+     * Build a URL → handler routing manifest from the index. Each entry
+     * pairs a route node (URL + method) with its handler function/method
+     * via the `references` edge that framework resolvers emit. Returns
+     * null when fewer than 3 valid (non-test) routes exist.
+     */
+    getRoutingManifest(limit?: number): {
+        entries: Array<{
+            url: string;
+            handler: string;
+            handlerFile: string;
+            handlerLine: number;
+            handlerKind: string;
+        }>;
+        topHandlerFile: string | null;
+        topHandlerFileCount: number;
+        totalRoutes: number;
+    } | null;
     /**
      * Get outgoing edges from a node
      */

@@ -22,6 +22,19 @@ const kotlin_1 = require("./kotlin");
 const dart_1 = require("./dart");
 const pascal_1 = require("./pascal");
 const scala_1 = require("./scala");
+const lua_1 = require("./lua");
+const r_1 = require("./r");
+const luau_1 = require("./luau");
+const objc_1 = require("./objc");
+const cfscript_1 = require("./cfscript");
+const cfquery_1 = require("./cfquery");
+const cobol_1 = require("./cobol");
+const vbnet_1 = require("./vbnet");
+const erlang_1 = require("./erlang");
+const solidity_1 = require("./solidity");
+const terraform_1 = require("./terraform");
+const arkts_1 = require("./arkts");
+const nix_1 = require("./nix");
 exports.EXTRACTORS = {
     typescript: typescript_1.typescriptExtractor,
     tsx: typescript_1.typescriptExtractor,
@@ -41,5 +54,18 @@ exports.EXTRACTORS = {
     dart: dart_1.dartExtractor,
     pascal: pascal_1.pascalExtractor,
     scala: scala_1.scalaExtractor,
+    lua: lua_1.luaExtractor,
+    r: r_1.rExtractor,
+    luau: luau_1.luauExtractor,
+    objc: objc_1.objcExtractor,
+    cfscript: cfscript_1.cfscriptExtractor,
+    cfquery: cfquery_1.cfqueryExtractor,
+    cobol: cobol_1.cobolExtractor,
+    vbnet: vbnet_1.vbnetExtractor,
+    erlang: erlang_1.erlangExtractor,
+    solidity: solidity_1.solidityExtractor,
+    terraform: terraform_1.terraformExtractor,
+    arkts: arkts_1.arktsExtractor,
+    nix: nix_1.nixExtractor,
 };
 //# sourceMappingURL=index.js.map

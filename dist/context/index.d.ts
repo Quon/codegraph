@@ -7,6 +7,7 @@
 import { Subgraph, TaskContext, TaskInput, BuildContextOptions, FindRelevantContextOptions } from '../types';
 import { QueryBuilder } from '../db/queries';
 import { GraphTraverser } from '../graph';
+export { LOW_CONFIDENCE_MARKER } from './markers';
 /**
  * Context Builder
  *
@@ -33,6 +34,27 @@ export declare class ContextBuilder {
      * @returns TaskContext (structured) or formatted string
      */
     buildContext(input: TaskInput, options?: BuildContextOptions): Promise<TaskContext | string>;
+    /**
+     * Honest handoff appended when retrieval confidence is low (the query matched
+     * mostly common words). Instead of the usual "this covers the surface" framing
+     * — which, when wrong, sends the agent off to Read/Grep — it admits the
+     * uncertainty and routes the agent to the precise tools (explore with real
+     * symbol names, search, or files to browse the closest areas we *did* surface).
+     */
+    private buildLowConfidenceNote;
+    /**
+     * Surface short call-paths among the symbols this context already found,
+     * derived in-memory from the subgraph's `calls` edges (no extra queries).
+     *
+     * This bakes the value of path-finding INTO the always-loaded `context` tool.
+     * Agents reliably read context's output but do NOT discover/adopt a standalone
+     * trace tool (in deferred-MCP harnesses they only ToolSearch-select tools they
+     * already know). Delivering the flow here means "how does X reach Y" is
+     * answered without the agent needing to find, load, or choose a new tool.
+     * Chains stop where the static call graph ends (e.g. dynamic dispatch) — that
+     * truncation is honest, and the agent can codegraph_node the last hop to bridge.
+     */
+    private buildCallPathsSection;
     /**
      * Find relevant subgraph for a query
      *

@@ -20,7 +20,7 @@ export type EdgeKind = 'contains' | 'calls' | 'imports' | 'exports' | 'extends' 
  * Supported programming languages. See NODE_KINDS for why this is a
  * runtime-iterable const array.
  */
-export declare const LANGUAGES: readonly ["typescript", "javascript", "tsx", "jsx", "python", "go", "rust", "java", "c", "cpp", "csharp", "php", "ruby", "swift", "kotlin", "dart", "svelte", "vue", "liquid", "pascal", "scala", "unknown"];
+export declare const LANGUAGES: readonly ["typescript", "javascript", "tsx", "jsx", "arkts", "python", "go", "rust", "java", "c", "cpp", "csharp", "razor", "php", "ruby", "swift", "kotlin", "dart", "svelte", "vue", "astro", "liquid", "pascal", "scala", "lua", "luau", "objc", "r", "solidity", "nix", "yaml", "twig", "xml", "properties", "cfml", "cfscript", "cfquery", "cobol", "vbnet", "erlang", "terraform", "unknown"];
 export type Language = (typeof LANGUAGES)[number];
 /**
  * A node in the knowledge graph representing a code symbol
@@ -64,6 +64,14 @@ export interface Node {
     decorators?: string[];
     /** Generic type parameters */
     typeParameters?: string[];
+    /**
+     * Normalized return/result type name for a function/method (the bare class
+     * name, smart-pointer pointee unwrapped). Captured for C/C++ so resolution
+     * can infer a chained receiver's type from what the inner call returns —
+     * `Foo::instance().bar()` resolves `bar` on `Foo` (issue #645). Undefined for
+     * languages/symbols where it isn't captured.
+     */
+    returnType?: string;
     /** When the node was last updated */
     updatedAt: number;
 }
@@ -140,6 +148,13 @@ export interface ExtractionError {
     code?: string;
 }
 /**
+ * Kinds an unresolved reference can carry. `function_ref` is internal-only —
+ * a function name used as a VALUE (callback registration, #756). It never
+ * becomes an edge kind: resolution maps it to a `references` edge targeting
+ * function/method nodes only (see `matchFunctionRef`).
+ */
+export type ReferenceKind = EdgeKind | 'function_ref';
+/**
  * A reference that couldn't be resolved during extraction
  */
 export interface UnresolvedReference {
@@ -148,7 +163,7 @@ export interface UnresolvedReference {
     /** Name being referenced */
     referenceName: string;
     /** Type of reference (call, type, import, etc.) */
-    referenceKind: EdgeKind;
+    referenceKind: ReferenceKind;
     /** Location of the reference */
     line: number;
     column: number;
@@ -169,6 +184,14 @@ export interface Subgraph {
     edges: Edge[];
     /** Root node IDs (entry points) */
     roots: string[];
+    /**
+     * Retrieval confidence for context-style queries. `'low'` means the query
+     * resolved only to isolated common-word matches (no entry point corroborated
+     * by 2+ distinct query terms) — callers should surface an honest handoff to
+     * explore/trace rather than present the results as comprehensive. Undefined
+     * for graph traversals that don't run the search-ranking path.
+     */
+    confidence?: 'high' | 'low';
 }
 /**
  * Options for graph traversal
@@ -212,10 +235,33 @@ export interface SearchOptions {
 export interface SearchResult {
     /** Matching node */
     node: Node;
-    /** Relevance score (0-1) */
+    /**
+     * Relevance score for relative ranking only — higher is more relevant.
+     * NOT normalized and NOT a 0-1 fraction: the FTS path returns an unbounded
+     * BM25 magnitude (often in the tens or hundreds), while the fuzzy/exact
+     * paths return ~0-1. Use it to order results, not as an absolute percentage.
+     */
     score: number;
     /** Matched text snippets for highlighting */
     highlights?: string[];
+}
+/**
+ * A symbol whose name-segments match prose words from a prompt — the
+ * graph-derived signal behind the front-load hook's medium tier
+ * (CodeGraph.getSegmentMatches). Always verified to exist in `nodes` at the
+ * time it is returned.
+ */
+export interface SegmentMatch {
+    /** Symbol name as indexed (e.g. `OrderStateMachine`). */
+    name: string;
+    /** Kind of the representative definition. */
+    kind: NodeKind;
+    /** File of the representative definition. */
+    filePath: string;
+    /** 1-based start line of the representative definition. */
+    startLine: number;
+    /** The prompt words (normalized) that matched this name's segments. */
+    matchedWords: string[];
 }
 /**
  * Context information for code understanding
@@ -259,60 +305,6 @@ export interface CodeBlock {
     /** Associated node if extracted */
     node?: Node;
 }
-/**
- * Framework-specific hints for better extraction
- */
-export interface FrameworkHint {
-    /** Framework name (react, express, django, etc.) */
-    name: string;
-    /** Version constraint if relevant */
-    version?: string;
-    /** Custom patterns for this framework */
-    patterns?: {
-        /** Component detection patterns */
-        components?: string[];
-        /** Route detection patterns */
-        routes?: string[];
-        /** Model detection patterns */
-        models?: string[];
-    };
-}
-/**
- * Configuration for a CodeGraph project
- */
-export interface CodeGraphConfig {
-    /** Schema version for migrations */
-    version: number;
-    /** Root directory of the project */
-    rootDir: string;
-    /** Glob patterns for files to include */
-    include: string[];
-    /** Glob patterns for files to exclude */
-    exclude: string[];
-    /** Languages to process (auto-detected if empty) */
-    languages: Language[];
-    /** Framework hints for better extraction */
-    frameworks: FrameworkHint[];
-    /** Maximum file size to process (in bytes) */
-    maxFileSize: number;
-    /** Whether to extract docstrings */
-    extractDocstrings: boolean;
-    /** Whether to track call sites */
-    trackCallSites: boolean;
-    /** Custom symbol patterns to extract */
-    customPatterns?: {
-        /** Name for this pattern group */
-        name: string;
-        /** Regex pattern to match */
-        pattern: string;
-        /** Node kind to assign */
-        kind: NodeKind;
-    }[];
-}
-/**
- * Default configuration values
- */
-export declare const DEFAULT_CONFIG: CodeGraphConfig;
 /**
  * Database schema version info
  */

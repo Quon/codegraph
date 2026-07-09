@@ -63,11 +63,10 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.MemoryMonitor = exports.Mutex = exports.FileLock = void 0;
+exports.MemoryMonitor = exports.Mutex = exports.FileLock = exports.CONFIG_LEAF_LANGUAGES = void 0;
+exports.isConfigLeafNode = isConfigLeafNode;
 exports.validatePathWithinRoot = validatePathWithinRoot;
 exports.validateProjectPath = validateProjectPath;
-exports.isPathWithinRoot = isPathWithinRoot;
-exports.isPathWithinRootReal = isPathWithinRootReal;
 exports.safeJsonParse = safeJsonParse;
 exports.clamp = clamp;
 exports.normalizePath = normalizePath;
@@ -88,23 +87,97 @@ const path = __importStar(require("path"));
 const SENSITIVE_PATHS = new Set([
     '/', '/etc', '/usr', '/bin', '/sbin', '/var', '/tmp', '/dev', '/proc', '/sys',
     '/root', '/boot', '/lib', '/lib64', '/opt',
-    'C:\\', 'C:\\Windows', 'C:\\Windows\\System32',
+    'c:\\', 'c:\\windows', 'c:\\windows\\system32',
 ]);
 /**
- * Validate that a resolved file path stays within the project root.
- * Prevents path traversal attacks (e.g. node.filePath = "../../etc/passwd").
+ * Config "languages" whose nodes are pure key/value DATA lifted from a config
+ * file (e.g. Spring `application.{yml,properties}`), not source code.
+ */
+exports.CONFIG_LEAF_LANGUAGES = new Set(['yaml', 'properties']);
+/**
+ * A config-leaf node is a single key lifted out of a pure config/data file —
+ * `kind: 'constant'` in a {@link CONFIG_LEAF_LANGUAGES} language. Its on-disk
+ * line is `key = <value>`, and that value is routinely a secret (DB password,
+ * API key, JDBC URL with embedded creds). CodeGraph must surface the KEY only
+ * and never read/return the value, or it pushes secrets into agent context
+ * unbidden — the value isn't needed for resolution, and an agent that genuinely
+ * needs it can read the file directly. (#383)
+ */
+function isConfigLeafNode(node) {
+    return node.kind === 'constant' && !!node.language && exports.CONFIG_LEAF_LANGUAGES.has(node.language);
+}
+/**
+ * Whether `child` is `parent` itself or sits underneath it. Case-insensitive on
+ * Windows — NTFS is case-insensitive, and realpathSync can hand back a different
+ * case than the lexical root, which would otherwise false-reject a valid file.
+ */
+function isWithinDir(child, parent) {
+    let c = child;
+    let p = parent;
+    if (process.platform === 'win32') {
+        c = c.toLowerCase();
+        p = p.toLowerCase();
+    }
+    return c === p || c.startsWith(p + path.sep);
+}
+/**
+ * Validate that a file path stays within the project root, resolving symlinks.
+ *
+ * Two layers: a cheap lexical check that catches `../` traversal, then a
+ * realpath check that catches symlink escapes — an in-repo symlink whose
+ * logical path is inside the root but whose real target points outside it
+ * (issue #527). A symlink that stays within the root is still allowed, so
+ * legitimate in-tree symlinks keep working. Both content-serving read sinks
+ * (codegraph_node `includeCode`, codegraph_explore source) go through here, so
+ * this is the chokepoint that keeps out-of-root file contents from leaking.
+ *
+ * `allowSymlinkEscape` waives **only** the realpath-escape rejection (the
+ * lexical `../` guard still applies) for the INDEXING read path. The directory
+ * walk deliberately descends into in-root symlinks whose targets live outside
+ * the root (e.g. a `game/` symlink in a Dota custom-game tree, #935); discovery
+ * and the reader must agree, or every file the walk enumerated fails to index.
+ * Indexing only reads paths it just discovered, into a local index — it never
+ * serves them to an agent, so this does not widen the #527 leak surface. The
+ * content-serving sinks must never pass this flag.
  *
  * @param projectRoot - The project root directory
- * @param filePath - The relative file path to validate
- * @returns The resolved absolute path, or null if it escapes the root
+ * @param filePath - The (relative or absolute) file path to validate
+ * @param options.allowSymlinkEscape - Follow in-root symlinks out of the root
+ *   (indexing read path only); defaults to the strict, leak-safe behavior.
+ * @returns The resolved absolute path (realpath when it exists), or null if it
+ *   escapes the root
  */
-function validatePathWithinRoot(projectRoot, filePath) {
+function validatePathWithinRoot(projectRoot, filePath, options) {
     const resolved = path.resolve(projectRoot, filePath);
     const normalizedRoot = path.resolve(projectRoot);
-    if (!resolved.startsWith(normalizedRoot + path.sep) && resolved !== normalizedRoot) {
+    // 1. Lexical containment — cheap, catches `../` traversal. Applies even on
+    //    the indexing read path: a crafted `../` escape is still rejected.
+    if (!isWithinDir(resolved, normalizedRoot)) {
         return null;
     }
-    return resolved;
+    // 2. Symlink-aware containment — resolve symlinks on both sides and re-check,
+    //    so an in-repo symlink whose real target escapes the root is rejected.
+    //    The indexing read path (allowSymlinkEscape) skips only this rejection so
+    //    it stays consistent with the directory walk, which already followed the
+    //    in-root symlink to enumerate these files (#935).
+    try {
+        const realRoot = fs.realpathSync(normalizedRoot);
+        const realResolved = fs.realpathSync(resolved);
+        if (options?.allowSymlinkEscape) {
+            return realResolved;
+        }
+        return isWithinDir(realResolved, realRoot) ? realResolved : null;
+    }
+    catch (err) {
+        // ENOENT: the path doesn't exist yet (a file about to be written, or an
+        // index entry for a since-deleted file) — no symlink to follow, and the
+        // lexical check already passed, so allow the lexical path. Any other
+        // resolution failure (ELOOP, EACCES, …) is treated as unsafe → reject.
+        if (err.code === 'ENOENT') {
+            return resolved;
+        }
+        return null;
+    }
 }
 /**
  * Validate that a path is a safe project root directory.
@@ -142,45 +215,6 @@ function validateProjectPath(dirPath) {
         return `Path does not exist or is not accessible: ${resolved}`;
     }
     return null;
-}
-/**
- * Check if a file path resolves to a location within the given root directory.
- *
- * Prevents path traversal attacks by ensuring the resolved absolute path
- * starts with the resolved root path. Handles '..' sequences, symlink-like
- * relative paths, and platform-specific separators.
- *
- * @param filePath - The path to check (can be relative or absolute)
- * @param rootDir - The root directory that filePath must stay within
- * @returns true if filePath resolves to a location within rootDir
- */
-function isPathWithinRoot(filePath, rootDir) {
-    const resolvedPath = path.resolve(rootDir, filePath);
-    const resolvedRoot = path.resolve(rootDir);
-    return resolvedPath.startsWith(resolvedRoot + path.sep) || resolvedPath === resolvedRoot;
-}
-/**
- * Like isPathWithinRoot but also resolves symlinks via fs.realpathSync.
- *
- * This catches symlink escapes where the logical path appears to be within
- * root but the real path on disk points elsewhere. Falls back to logical
- * path checking if realpath resolution fails (e.g. broken symlink).
- */
-function isPathWithinRootReal(filePath, rootDir) {
-    // First do the cheap logical check
-    if (!isPathWithinRoot(filePath, rootDir)) {
-        return false;
-    }
-    // Then verify with realpath to catch symlink escapes
-    try {
-        const realPath = fs.realpathSync(path.resolve(rootDir, filePath));
-        const realRoot = fs.realpathSync(rootDir);
-        return realPath.startsWith(realRoot + path.sep) || realPath === realRoot;
-    }
-    catch {
-        // If realpath fails (broken symlink, permissions), fall back to logical check
-        return true;
-    }
 }
 /**
  * Safely parse JSON with a fallback value.

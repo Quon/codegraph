@@ -2,6 +2,42 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.goExtractor = void 0;
 const tree_sitter_helpers_1 = require("../tree-sitter-helpers");
+/**
+ * A Go function's declared return type, normalized to the bare type a chained
+ * `New().Method()` could be called on (the #645/#608 mechanism). Reads the
+ * `result` field: a pointer `*Foo` is unwrapped to `Foo`, a multi-return
+ * `(*Foo, error)` takes the first result (the idiomatic value-or-error shape),
+ * a qualified `pkg.Foo` reduces to its last segment, and generics to the base.
+ * Built-ins / unnamed results simply fail the later existence check.
+ */
+function extractGoReturnType(node, source) {
+    let result = (0, tree_sitter_helpers_1.getChildByField)(node, 'result');
+    if (!result)
+        return undefined;
+    // Multi-return `(T, error)` → the first result's type.
+    if (result.type === 'parameter_list') {
+        const first = result.namedChildren.find((c) => c.type === 'parameter_declaration');
+        if (!first)
+            return undefined;
+        result = (0, tree_sitter_helpers_1.getChildByField)(first, 'type') ?? first;
+    }
+    // Unwrap a pointer `*Foo` → `Foo`.
+    if (result?.type === 'pointer_type') {
+        result =
+            result.namedChildren.find((c) => c.type === 'type_identifier' || c.type === 'qualified_type' || c.type === 'generic_type') ?? result;
+    }
+    if (!result)
+        return undefined;
+    const text = (0, tree_sitter_helpers_1.getNodeText)(result, source)
+        .trim()
+        .replace(/^\*/, '')
+        .replace(/<[^>]*>/g, '')
+        .replace(/\[[^\]]*\]/g, ''); // strip generic args `Foo[T]`
+    const last = text.split('.').pop()?.trim(); // qualified `pkg.Foo` → `Foo`
+    if (!last || !/^[A-Za-z_]\w*$/.test(last))
+        return undefined;
+    return last;
+}
 exports.goExtractor = {
     functionTypes: ['function_declaration'],
     classTypes: [], // Go doesn't have classes
@@ -18,6 +54,7 @@ exports.goExtractor = {
     bodyField: 'body',
     paramsField: 'parameters',
     returnField: 'result',
+    getReturnType: extractGoReturnType,
     getSignature: (node, source) => {
         const params = (0, tree_sitter_helpers_1.getChildByField)(node, 'parameters');
         const result = (0, tree_sitter_helpers_1.getChildByField)(node, 'result');
@@ -41,6 +78,18 @@ exports.goExtractor = {
             return 'interface';
         return undefined;
     },
+    isExported: (node, source) => {
+        // Go: a symbol is exported when its identifier starts with an uppercase letter.
+        // Look at the `name` field directly (works for function_declaration,
+        // method_declaration, type_spec, and var_spec / const_spec via extractor flow).
+        const nameNode = (0, tree_sitter_helpers_1.getChildByField)(node, 'name');
+        if (nameNode) {
+            const text = (0, tree_sitter_helpers_1.getNodeText)(nameNode, source);
+            const first = text.charCodeAt(0);
+            return first >= 65 && first <= 90; // A-Z
+        }
+        return false;
+    },
     getReceiverType: (node, source) => {
         // Go method_declaration has a "receiver" field: func (sl *scrapeLoop) run(...)
         // The receiver is a parameter_list containing a parameter_declaration
@@ -50,8 +99,12 @@ exports.goExtractor = {
             return undefined;
         // Find the type identifier inside the receiver
         const text = (0, tree_sitter_helpers_1.getNodeText)(receiver, source);
-        // Extract type name from patterns like "(sl *Type)", "(sl Type)", "(*Type)", "(Type)"
-        const match = text.match(/\*?\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)/);
+        // Extract type name from "(sl *Type)", "(sl Type)", "(*Type)", "(Type)" and
+        // generic receivers "(s *Stack[T])". Anchor on the opening "(" and skip an
+        // optional receiver var name; the old `name)`-anchored pattern never matched
+        // the `[T])` suffix, so generic-type methods were orphaned from their type
+        // (no struct→method `contains` edge). (#583)
+        const match = text.match(/\(\s*(?:[A-Za-z_]\w*\s+)?\*?\s*([A-Za-z_]\w*)/);
         return match?.[1];
     },
 };
