@@ -139,6 +139,22 @@ CodeGraph provides **code context**, not product requirements. For new features,
 - Edge cases and error handling
 - Acceptance criteria
 
+## Pre-Push Privacy Review
+
+**Before pushing to a public repository, a privacy review must be conducted.**
+
+Run the `/security-review` skill or ask Claude to "对项目进行隐私审查" to check for:
+
+- Hardcoded secrets, API keys, or tokens in source code or config files
+- Personal information (real names, email addresses, internal usernames) in code or comments
+- Internal hostnames, IPs, or infrastructure URLs
+- `.env` files or credential files not covered by `.gitignore`
+- Debug/scratch scripts committed to the repo root
+- Stale package names, GitHub URLs, or author identity references in source, docs, and `dist/`
+- Internal planning documents under `docs/` that should not be public
+
+Do not push or publish until all Medium-severity and above findings are resolved.
+
 ## Releases
 
 Releases are published to npm **and** mirrored as GitHub Releases on the
