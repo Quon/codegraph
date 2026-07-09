@@ -38,12 +38,14 @@ function setHome(dir: string): { restore: () => void } {
     APPDATA: process.env.APPDATA,
     XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
     HERMES_HOME: process.env.HERMES_HOME,
+    CODEX_HOME: process.env.CODEX_HOME,
   };
   process.env.HOME = dir;
   process.env.USERPROFILE = dir;
   process.env.APPDATA = path.join(dir, '.config');
   process.env.XDG_CONFIG_HOME = path.join(dir, '.config');
   delete process.env.HERMES_HOME;
+  delete process.env.CODEX_HOME;
   return {
     restore() {
       if (prev.HOME === undefined) delete process.env.HOME; else process.env.HOME = prev.HOME;
@@ -51,6 +53,7 @@ function setHome(dir: string): { restore: () => void } {
       if (prev.APPDATA === undefined) delete process.env.APPDATA; else process.env.APPDATA = prev.APPDATA;
       if (prev.XDG_CONFIG_HOME === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = prev.XDG_CONFIG_HOME;
       if (prev.HERMES_HOME === undefined) delete process.env.HERMES_HOME; else process.env.HERMES_HOME = prev.HERMES_HOME;
+      if (prev.CODEX_HOME === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = prev.CODEX_HOME;
     },
   };
 }
@@ -201,11 +204,35 @@ describe('Installer targets — partial-state idempotency', () => {
     // harnesses read AGENTS.md but never the MCP initialize instructions).
     expect(fs.existsSync(agentsMd)).toBe(true);
     const body = fs.readFileSync(agentsMd, 'utf-8');
+    const toml = fs.readFileSync(path.join(tmpHome, '.codex', 'config.toml'), 'utf-8');
     expect(body).toContain('## CodeGraph');
     expect(body).toContain('codegraph explore');
+    expect(toml).toContain('[mcp_servers.codegraph.env]');
+    expect(toml).toContain('NODE_OPTIONS = "--experimental-sqlite"');
     // Re-install is fully unchanged (byte-equal block → idempotent).
     const second = codex.install('global', { autoAllow: false });
     for (const f of second.files) expect(f.action).toBe('unchanged');
+  });
+
+  it('codex: prefers CODEX_HOME over ~/.codex when the standalone CLI uses it', () => {
+    const codex = getTarget('codex')!;
+    const codexHome = path.join(tmpHome, 'codex-home');
+    process.env.CODEX_HOME = codexHome;
+
+    const result = codex.install('global', { autoAllow: false });
+
+    const configToml = path.join(codexHome, 'config.toml');
+    const agentsMd = path.join(codexHome, 'AGENTS.md');
+    expect(result.files.map((f) => f.path).sort()).toEqual([agentsMd, configToml].sort());
+    expect(fs.existsSync(configToml)).toBe(true);
+    expect(fs.existsSync(agentsMd)).toBe(true);
+    expect(fs.readFileSync(configToml, 'utf-8')).toContain('NODE_OPTIONS = "--experimental-sqlite"');
+    expect(fs.existsSync(path.join(tmpHome, '.codex', 'config.toml'))).toBe(false);
+    expect(codex.detect('global')).toMatchObject({
+      installed: true,
+      alreadyConfigured: true,
+      configPath: configToml,
+    });
   });
 
   it('codex: install replaces a legacy AGENTS.md codegraph block with the current one, keeping user content', () => {
@@ -1263,12 +1290,21 @@ describe('Installer targets — TOML serializer (Codex backbone)', () => {
       '[mcp_servers.codegraph]',
       'command = "codegraph"',
       'args = ["serve"]',
+      '',
+      '[mcp_servers.codegraph.env]',
+      'NODE_OPTIONS = "--experimental-sqlite"',
+      '',
+      '[zzz]',
+      'baz = "qux"',
     ].join('\n');
     const { content, action } = removeTomlTable(existing, 'mcp_servers.codegraph');
     expect(action).toBe('removed');
     expect(content).toContain('[other_table]');
     expect(content).toContain('foo = "bar"');
+    expect(content).toContain('[zzz]');
+    expect(content).toContain('baz = "qux"');
     expect(content).not.toContain('mcp_servers.codegraph');
+    expect(content).not.toContain('NODE_OPTIONS');
   });
 
   it('removeTomlTable on missing table returns not-found, no content change', () => {

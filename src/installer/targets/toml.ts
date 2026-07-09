@@ -6,14 +6,15 @@
  * dependency (~50KB) for ~6 lines of output.
  *
  * Strategy: treat the file as text. Find the `[mcp_servers.codegraph]`
- * header line, splice it (and the lines that follow it until the next
- * `[...]` header or EOF) in or out. Everything outside that block is
- * preserved verbatim, byte-for-byte.
+ * header line, splice it and any direct subtables such as
+ * `[mcp_servers.codegraph.env]` until the next unrelated `[...]`
+ * header or EOF. Everything outside that block is preserved verbatim,
+ * byte-for-byte.
  *
  * Limitations (acceptable for our narrow use):
- *   - Only handles top-level table headers; not array-of-tables or
- *     subtables nested inside `[mcp_servers]` itself (we always write
- *     the full dotted key `[mcp_servers.codegraph]`).
+ *   - Only handles top-level table headers plus direct subtables under
+ *     the injected dotted key (we always write the full dotted key
+ *     `[mcp_servers.codegraph]`).
  *   - Doesn't validate sibling TOML — if the file is malformed
  *     elsewhere, our injection won't fix it but won't make it worse.
  *   - Quotes string values with double quotes; escapes `\` and `"`.
@@ -79,8 +80,8 @@ export function upsertTomlTable(
     };
   }
 
-  // Find the end of this block: next `[...]` header (at line start) or EOF.
-  const blockEnd = findNextTableHeader(fileContent, headerIdx + headerLine.length);
+  // Find the end of this block: next unrelated `[...]` header (at line start) or EOF.
+  const blockEnd = findTableBlockEnd(fileContent, header, headerIdx + headerLine.length);
   const existingBlock = fileContent.substring(headerIdx, blockEnd).replace(/\n+$/, '');
 
   if (existingBlock === block) {
@@ -113,7 +114,7 @@ export function removeTomlTable(
   const headerIdx = findHeaderIndex(fileContent, headerLine);
   if (headerIdx === -1) return { content: fileContent, action: 'not-found' };
 
-  const blockEnd = findNextTableHeader(fileContent, headerIdx + headerLine.length);
+  const blockEnd = findTableBlockEnd(fileContent, header, headerIdx + headerLine.length);
   const before = fileContent.substring(0, headerIdx).replace(/\n+$/, '');
   const after = fileContent.substring(blockEnd).replace(/^\n+/, '');
   const joined = before + (before && after ? '\n\n' : '') + after;
@@ -149,6 +150,23 @@ function findNextTableHeader(content: string, from: number): number {
       continue;
     }
     return nlIdx + 1;
+  }
+  return content.length;
+}
+
+function findTableBlockEnd(content: string, header: string, from: number): number {
+  let i = from;
+  while (i < content.length) {
+    const headerIdx = findNextTableHeader(content, i);
+    if (headerIdx === content.length) return content.length;
+    const headerEnd = content.indexOf(']', headerIdx);
+    if (headerEnd === -1) return content.length;
+    const nextHeader = content.substring(headerIdx + 1, headerEnd);
+    if (nextHeader.startsWith(`${header}.`)) {
+      i = headerEnd + 1;
+      continue;
+    }
+    return headerIdx;
   }
   return content.length;
 }

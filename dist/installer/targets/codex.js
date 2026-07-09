@@ -2,13 +2,14 @@
 /**
  * OpenAI Codex CLI target.
  *
- *   - MCP server entry to `~/.codex/config.toml` as the dotted-key
+ *   - MCP server entry to `$CODEX_HOME/config.toml` when `CODEX_HOME`
+ *     is set, otherwise `~/.codex/config.toml`, as the dotted-key
  *     table `[mcp_servers.codegraph]`. TOML — not JSON — handled by
  *     the narrow serializer in `./toml.ts`.
- *   - Instructions to `~/.codex/AGENTS.md`.
+ *   - Instructions to the matching `AGENTS.md`.
  *
  * Codex CLI as of 2026-05 has no project-local config concept —
- * everything lives under `~/.codex/`. `supportsLocation('local')`
+ * everything lives under the Codex home dir. `supportsLocation('local')`
  * returns false; the orchestrator skips Codex when the user picks
  * the local install location.
  *
@@ -57,6 +58,9 @@ const instructions_template_1 = require("../instructions-template");
 const toml_1 = require("./toml");
 const TOML_HEADER = 'mcp_servers.codegraph';
 function configDir() {
+    if (process.env.CODEX_HOME) {
+        return process.env.CODEX_HOME;
+    }
     return path.join(os.homedir(), '.codex');
 }
 function tomlConfigPath() {
@@ -64,6 +68,9 @@ function tomlConfigPath() {
 }
 function instructionsPath() {
     return path.join(configDir(), 'AGENTS.md');
+}
+function configDirLabel() {
+    return process.env.CODEX_HOME ? '$CODEX_HOME' : '~/.codex';
 }
 class CodexTarget {
     id = 'codex';
@@ -135,7 +142,7 @@ class CodexTarget {
     }
     printConfig(loc) {
         if (loc !== 'global') {
-            return '# Codex CLI has no project-local config — use --location=global.\n';
+            return `# Codex CLI has no project-local config — use --location=global. Global config lives under ${configDirLabel()}.\n`;
         }
         const block = buildCodegraphBlock();
         return `# Add to ${tomlConfigPath()}\n\n${block}\n`;
@@ -148,10 +155,14 @@ class CodexTarget {
 }
 function buildCodegraphBlock() {
     const mcp = (0, shared_1.getMcpServerConfig)();
-    return (0, toml_1.buildTomlTable)(TOML_HEADER, {
+    const server = (0, toml_1.buildTomlTable)(TOML_HEADER, {
         command: mcp.command,
         args: mcp.args,
     });
+    const env = (0, toml_1.buildTomlTable)(`${TOML_HEADER}.env`, {
+        NODE_OPTIONS: '--experimental-sqlite',
+    });
+    return `${server}\n\n${env}`;
 }
 function writeMcpEntry() {
     const file = tomlConfigPath();

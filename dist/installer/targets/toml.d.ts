@@ -6,14 +6,15 @@
  * dependency (~50KB) for ~6 lines of output.
  *
  * Strategy: treat the file as text. Find the `[mcp_servers.codegraph]`
- * header line, splice it (and the lines that follow it until the next
- * `[...]` header or EOF) in or out. Everything outside that block is
- * preserved verbatim, byte-for-byte.
+ * header line, splice it and any direct subtables such as
+ * `[mcp_servers.codegraph.env]` until the next unrelated `[...]`
+ * header or EOF. Everything outside that block is preserved verbatim,
+ * byte-for-byte.
  *
  * Limitations (acceptable for our narrow use):
- *   - Only handles top-level table headers; not array-of-tables or
- *     subtables nested inside `[mcp_servers]` itself (we always write
- *     the full dotted key `[mcp_servers.codegraph]`).
+ *   - Only handles top-level table headers plus direct subtables under
+ *     the injected dotted key (we always write the full dotted key
+ *     `[mcp_servers.codegraph]`).
  *   - Doesn't validate sibling TOML — if the file is malformed
  *     elsewhere, our injection won't fix it but won't make it worse.
  *   - Quotes string values with double quotes; escapes `\` and `"`.
