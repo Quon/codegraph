@@ -1,12 +1,11 @@
 /**
  * Parse Worker
  *
- * Runs tree-sitter parsing in a child process so the main process
+ * Runs tree-sitter parsing in a separate thread so the main thread
  * stays unblocked and the UI animation renders smoothly.
- * Spawned via child_process.fork() with --no-wasm-tier-up to prevent
- * V8 Zone OOM from JIT tier-up of WASM functions.
  */
 
+import { parentPort } from 'worker_threads';
 import { extractFromSource } from './tree-sitter';
 import { detectLanguage, loadGrammarsForLanguages, resetParser } from './grammars';
 import type { Language, ExtractionResult } from '../types';
@@ -56,21 +55,17 @@ import type { Language, ExtractionResult } from '../types';
 const PARSER_RESET_INTERVAL = 5000;
 const parseCounts = new Map<Language, number>();
 
-// Recycle threshold: signal the main thread to replace this worker when RSS
-// exceeds this value. Zone memory (used by V8 JIT tier-up of WASM functions)
-// is reflected in RSS and cannot be freed without destroying the V8 isolate.
-const RECYCLE_RSS_THRESHOLD_MB = 400;
-
-process.on('message', async (msg: { type: string; id?: number; filePath?: string; content?: string; frameworkNames?: string[] }) => {
-  if (msg.type === 'parse') {
+parentPort!.on('message', async (msg: { type: string; id?: number; filePath?: string; content?: string; languages?: Language[]; frameworkNames?: string[]; language?: Language }) => {
+  if (msg.type === 'load-grammars') {
+    await loadGrammarsForLanguages(msg.languages!);
+    parentPort!.postMessage({ type: 'grammars-loaded' });
+  } else if (msg.type === 'parse') {
     const { id, filePath, content, frameworkNames } = msg;
     try {
-      const language = detectLanguage(filePath!, content);
-
-      // Load this language's grammar on first use — lazy loading keeps peak
-      // WASM memory low (one grammar at a time vs all upfront).
-      await loadGrammarsForLanguages([language]);
-
+      // The main thread resolves the language (it holds the project's
+      // codegraph.json extension overrides) and sends it; fall back to detection
+      // for older callers / safety.
+      const language = msg.language ?? detectLanguage(filePath!, content);
       const result: ExtractionResult = extractFromSource(filePath!, content!, language, frameworkNames);
 
       // Periodic parser reset to reclaim WASM heap memory
@@ -80,13 +75,7 @@ process.on('message', async (msg: { type: string; id?: number; filePath?: string
         resetParser(language);
       }
 
-      // Signal the main thread to recycle this worker when RSS is high.
-      // Zone memory from V8 JIT tier-up of WASM only frees when the isolate
-      // is destroyed — the main thread will replace us after this batch.
-      const rssMb = process.memoryUsage().rss / 1024 / 1024;
-      const shouldRecycle = rssMb > RECYCLE_RSS_THRESHOLD_MB;
-
-      process.send!({ type: 'parse-result', id, result, shouldRecycle });
+      parentPort!.postMessage({ type: 'parse-result', id, result });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
 
@@ -97,7 +86,7 @@ process.on('message', async (msg: { type: string; id?: number; filePath?: string
         process.exit(1);
       }
 
-      process.send!({
+      parentPort!.postMessage({
         type: 'parse-result',
         id,
         result: {
@@ -110,6 +99,6 @@ process.on('message', async (msg: { type: string; id?: number; filePath?: string
       });
     }
   } else if (msg.type === 'shutdown') {
-    process.send!({ type: 'shutdown-ack' });
+    parentPort!.postMessage({ type: 'shutdown-ack' });
   }
 });

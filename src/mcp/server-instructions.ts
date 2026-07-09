@@ -7,52 +7,97 @@
  * before it sees individual tool descriptions.
  *
  * Goals when editing this:
- *   - Tool selection by intent (which tool for which question)
- *   - Common chains (refactor planning = X then Y)
- *   - Anti-patterns (don't grep when codegraph_search is faster)
+ *   - Lead the agent to codegraph_explore for any structural/flow question
+ *   - Reinforce "explore instead of Read/Grep" for indexed code
+ *   - Anti-patterns (don't re-verify with grep; don't hand-reconstruct flows)
  *
  * Keep it tight. The agent reads this every session — long instructions
- * burn tokens. Reference only tools that exist on `main`; gate any
- * conditional tools behind feature checks if/when they ship.
+ * burn tokens. The DEFAULT MCP surface is `codegraph_explore` ALONE (see
+ * DEFAULT_MCP_TOOLS in tools.ts) — reference only that tool here. The other
+ * tools (node/search/callers/…) stay defined and are re-enablable via
+ * CODEGRAPH_MCP_TOOLS, but they are NOT listed to agents, so don't name them.
  */
+export const SERVER_INSTRUCTIONS = `# Codegraph — code intelligence over an indexed knowledge graph
 
-import type { ProjectEntry } from '../projects';
+Codegraph is a SQLite knowledge graph of every symbol, edge, and file in
+the workspace — pre-computed structure you would otherwise re-derive by
+reading files (cached intelligence: thousands of parse/trace decisions you
+don't pay to re-reason each run). Reads are sub-millisecond; the index lags
+writes by ~1s through the file watcher. Reach for it BEFORE *and* while
+writing or editing code — not just for questions: one call returns the
+verbatim source PLUS who calls it and what it affects, so you edit with the
+blast radius in view. More accurate context, in far fewer tokens and
+round-trips than reading files yourself.
 
-export const SERVER_INSTRUCTIONS = `# Codegraph — code intelligence
+## One tool: codegraph_explore — use it instead of reading files
 
-SQLite knowledge graph of every symbol, edge, and file. Consult it BEFORE writing code.
+There is a single tool, \`codegraph_explore\`, and it is Read-equivalent. It
+takes either a natural-language question or a bag of symbol/file names and
+returns the **verbatim, line-numbered source** of the relevant symbols
+grouped by file — the same \`<n>\\t<line>\` shape \`Read\` gives you, safe to
+\`Edit\` from — PLUS the call path among them (including dynamic-dispatch hops
+like callbacks, React re-render, and JSX children that grep can't follow) and
+a blast-radius summary of what depends on them.
 
-## Tool by intent
+Whether you're answering "how does X work" or implementing a change (fixing a
+bug, adding a feature), call \`codegraph_explore\` before you Read. ONE call
+usually answers the whole question. Codegraph IS the pre-built search index —
+so running your own grep + read loop, or delegating the lookup to a separate
+file-reading sub-task/agent, repeats work codegraph already did and costs more
+for the same answer. A direct codegraph answer is typically one to a few
+calls; a grep/read exploration is dozens.
 
-| Question | Tool |
-|---|---|
-| Find symbol by name | \`codegraph_search\` |
-| Understand a task/feature/area | \`codegraph_context\` ← PRIMARY |
-| What calls this? | \`codegraph_callers\` |
-| What does this call? | \`codegraph_callees\` |
-| What breaks if I change this? | \`codegraph_impact\` |
-| Full source of one symbol | \`codegraph_node\` |
-| Survey an unfamiliar module | \`codegraph_explore\` |
-| Directory structure | \`codegraph_files\` |
+## How to query
 
-Use \`codegraph_context\` first — it composes search + callers + callees in one call.
-Don't grep for symbol names; \`codegraph_search\` is faster.
-Don't chain search → node when you want context — that's one \`codegraph_context\` call.
+- **Almost any question — "how does X work", architecture, a bug, "what/where is X", or surveying an area** → \`codegraph_explore\` with a natural-language question or the relevant names. ONE capped call returns the verbatim source grouped by file; most often the ONLY call you need.
+- **"How does X reach/become Y? / the flow / the path from X to Y"** → \`codegraph_explore\`, naming the symbols that span the flow (e.g. \`mutateElement renderScene\`) — it surfaces the call path among them, riding dynamic-dispatch hops, and returns their source.
+- **Reading or editing a file/symbol you can name** → put its name or file path in the \`codegraph_explore\` query — it returns that current line-numbered source (safe to \`Edit\` from) with the call path and blast radius attached, so you don't Read it separately. For an overloaded name it returns every matching definition's body in one call.
+- **Need more?** Call \`codegraph_explore\` again with more specific names — treat the source it returns as already Read.
+
+## Anti-patterns
+
+- **Trust codegraph's results — don't re-verify them with grep.** They come from a full AST parse; re-checking with grep is slower, less accurate, and wastes context.
+- **Don't grep or Read first** to find or understand indexed code — ONE \`codegraph_explore\` returns the relevant symbols' source together in a single round-trip. Reach for raw \`Read\`/\`Grep\` only to confirm a specific detail codegraph didn't cover, or for what codegraph doesn't index (configs, docs).
+- **Don't reconstruct a flow by hand** — name the endpoints in one \`codegraph_explore\` and it surfaces the path between them, dynamic-dispatch hops included.
+- **After editing, check the staleness banner.** When a tool response starts with "⚠️ Some files referenced below were edited since the last index sync…", the listed files are pending re-index — Read those specific files for accurate content. Every file NOT in that banner is fresh, so still trust codegraph. A different, rarer banner — "⚠️ CodeGraph auto-sync is DISABLED…" — means live watching stopped entirely (the whole index is frozen, not just a few files); until it's resolved, Read files directly to confirm anything that may have changed.
+
+## Limitations
+
+- If a tool reports a project isn't indexed (no \`.codegraph/\`), stop calling codegraph tools for that project for the rest of the session and use your built-in tools there instead. Indexing is the user's decision — mention they can run \`codegraph init\` if it comes up, but don't run it yourself.
+- Index lags file writes by ~1 second.
+- Cross-file resolution is best-effort name matching; ambiguous calls may return multiple candidates.
+- No live correctness validation — that's still the TypeScript compiler / test suite / linter's job. Codegraph supplements those with structural context they don't have.
 `;
 
 /**
- * Build the full instructions string for the MCP initialize response.
- * Appends a monorepo section when sub-projects are registered.
+ * Instructions variant sent when the server's own root has NO codegraph index.
+ *
+ * The tools are still exposed (gating tool availability on whether `./` has an
+ * index is the bug behind #964: it breaks monorepos where only sub-projects are
+ * indexed, and a server that started before `codegraph init` never surfaces the
+ * tools afterward). Instead of an "inactive" note, this variant tells the agent
+ * codegraph works **per project**: there's no default project to query, so pass
+ * a `projectPath` to any project that HAS a `.codegraph/`. The full single-
+ * project playbook ({@link SERVER_INSTRUCTIONS}) is sent instead when the root
+ * IS indexed, so the common case stays tight.
  */
-export function buildInstructions(projects: ProjectEntry[]): string {
-  if (projects.length === 0) return SERVER_INSTRUCTIONS;
+export const SERVER_INSTRUCTIONS_NO_ROOT_INDEX = `# Codegraph — available (per-project; pass projectPath)
 
-  return SERVER_INSTRUCTIONS + `
-## Monorepo
+Codegraph is a SQLite knowledge graph of a codebase's symbols, edges, and
+files: one \`codegraph_explore\` call returns the verbatim, line-numbered source
+of the relevant symbols PLUS the call paths between them and a blast-radius
+summary — replacing a grep + Read loop with one round-trip.
 
-This workspace has multiple indexed sub-projects. Pass \`project: "<name>"\` to any tool to target one, or \`project: "*"\` for all.
+This server started somewhere with no \`.codegraph/\` of its own, so there is no
+default project — but the tools are available and work **per project**:
 
-${projects.map((e) => `- **${e.name}** → \`${e.path}\``).join('\n')}
+- To query a project that HAS a \`.codegraph/\` index (e.g. a service inside a
+  monorepo, or a second repo), pass its path as \`projectPath\` to
+  \`codegraph_explore\` (and any other codegraph tool). Codegraph resolves the
+  nearest \`.codegraph/\` at or above that path and answers from it — for as many
+  projects as you like in one session.
+- For a project with no \`.codegraph/\`, use your built-in tools (Read/Grep/Glob)
+  for that project. Indexing is the user's decision — don't run it yourself, but
+  if it comes up they can run \`codegraph init\` in a project to enable codegraph
+  there (a new index is picked up live, no restart).
 `;
-}
-
