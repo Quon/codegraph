@@ -124,8 +124,10 @@ malformed.
 - Limit the generated appendix to 16 KiB.
 - If entries are omitted, include a final count such as
   `... 23 additional registered projects omitted`.
-- Cap individual rendered names and paths before formatting while retaining
-  enough information to identify normal projects.
+- Cap individual rendered names before formatting. Never truncate a
+  `projectPath`: if a complete escaped project record cannot fit, omit that
+  record and include it in the omission count so every path shown remains
+  directly usable.
 
 These bounds apply only to the generated appendix and do not change the
 registry itself.
@@ -180,8 +182,8 @@ tool call with projectPath
   `status=not-indexed`, so the model does not repeatedly call tools against
   them.
 - Duplicate paths are collapsed for presentation; the registry is not mutated.
-- Project names and paths are escaped and length-bounded before prompt
-  construction.
+- Project names and paths are escaped before prompt construction. Names are
+  length-bounded; paths are either included exactly or omitted.
 - The builder performs no recursive scan and opens no SQLite connection.
 - Initialization behavior for non-monorepo repositories stays byte-for-byte
   unchanged.
@@ -233,4 +235,3 @@ and is an accepted limitation.
 This is additive prompt context. Tool names, schemas, query arguments, database
 layout, registry format, and installer output remain unchanged. Existing MCP
 clients that ignore `instructions` continue to behave exactly as before.
-
