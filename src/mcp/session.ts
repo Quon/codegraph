@@ -20,6 +20,7 @@ import { SERVER_INSTRUCTIONS, SERVER_INSTRUCTIONS_NO_ROOT_INDEX } from './server
 import { CodeGraphPackageVersion } from './version';
 import { findNearestCodeGraphRoot } from '../directory';
 import { getTelemetry, ClientInfo } from '../telemetry';
+import { buildMonorepoInstructions } from './monorepo-instructions';
 
 /**
  * MCP Server Info — kept on the session because some clients log it. The
@@ -200,14 +201,20 @@ export class MCPSession {
     // surfaced the tools after a mid-session `codegraph init`. When no explicit
     // path is known yet (roots/list dance pending), cwd is the best predictor of
     // where the default project will resolve.
-    const indexed = findNearestCodeGraphRoot(explicitPath ?? process.cwd()) !== null;
+    const candidatePath = explicitPath ?? process.cwd();
+    const indexed = findNearestCodeGraphRoot(candidatePath) !== null;
+    const baseInstructions = indexed ? SERVER_INSTRUCTIONS : SERVER_INSTRUCTIONS_NO_ROOT_INDEX;
+    const monorepoInstructions = buildMonorepoInstructions(candidatePath);
+    const instructions = monorepoInstructions
+      ? `${baseInstructions.trimEnd()}\n\n${monorepoInstructions}`
+      : baseInstructions;
 
     // Respond to the handshake BEFORE doing any heavy init — see issue #172.
     this.transport.sendResult(request.id, {
       protocolVersion: PROTOCOL_VERSION,
       capabilities: { tools: {} },
       serverInfo: SERVER_INFO,
-      instructions: indexed ? SERVER_INSTRUCTIONS : SERVER_INSTRUCTIONS_NO_ROOT_INDEX,
+      instructions,
     });
 
     if (explicitPath) {

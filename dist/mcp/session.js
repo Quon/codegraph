@@ -54,6 +54,7 @@ const server_instructions_1 = require("./server-instructions");
 const version_1 = require("./version");
 const directory_1 = require("../directory");
 const telemetry_1 = require("../telemetry");
+const monorepo_instructions_1 = require("./monorepo-instructions");
 /**
  * MCP Server Info — kept on the session because some clients log it. The
  * version tracks the real package version (was a hard-coded '0.1.0').
@@ -214,13 +215,19 @@ class MCPSession {
         // surfaced the tools after a mid-session `codegraph init`. When no explicit
         // path is known yet (roots/list dance pending), cwd is the best predictor of
         // where the default project will resolve.
-        const indexed = (0, directory_1.findNearestCodeGraphRoot)(explicitPath ?? process.cwd()) !== null;
+        const candidatePath = explicitPath ?? process.cwd();
+        const indexed = (0, directory_1.findNearestCodeGraphRoot)(candidatePath) !== null;
+        const baseInstructions = indexed ? server_instructions_1.SERVER_INSTRUCTIONS : server_instructions_1.SERVER_INSTRUCTIONS_NO_ROOT_INDEX;
+        const monorepoInstructions = (0, monorepo_instructions_1.buildMonorepoInstructions)(candidatePath);
+        const instructions = monorepoInstructions
+            ? `${baseInstructions.trimEnd()}\n\n${monorepoInstructions}`
+            : baseInstructions;
         // Respond to the handshake BEFORE doing any heavy init — see issue #172.
         this.transport.sendResult(request.id, {
             protocolVersion: exports.PROTOCOL_VERSION,
             capabilities: { tools: {} },
             serverInfo: exports.SERVER_INFO,
-            instructions: indexed ? server_instructions_1.SERVER_INSTRUCTIONS : server_instructions_1.SERVER_INSTRUCTIONS_NO_ROOT_INDEX,
+            instructions,
         });
         if (explicitPath) {
             // Kick off engine init in the background. If another session in the

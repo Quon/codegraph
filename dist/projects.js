@@ -95,7 +95,7 @@ function getProjectsPath(projectRoot) {
  * Returns an empty array if the file doesn't exist or is malformed.
  * Legacy plain-string entries are automatically converted.
  */
-function loadProjectEntries(projectRoot) {
+function loadProjectEntries(projectRoot, options = {}) {
     const filePath = getProjectsPath(projectRoot);
     try {
         if (!fs.existsSync(filePath))
@@ -107,7 +107,9 @@ function loadProjectEntries(projectRoot) {
         return parsed.map(parseEntry).filter((e) => e !== null);
     }
     catch (err) {
-        process.stderr.write(`[CodeGraph] Failed to load projects.json: ${err instanceof Error ? err.message : String(err)}\n`);
+        if (!options.quiet) {
+            process.stderr.write(`[CodeGraph] Failed to load projects.json: ${err instanceof Error ? err.message : String(err)}\n`);
+        }
         return [];
     }
 }

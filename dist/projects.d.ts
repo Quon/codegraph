@@ -7,6 +7,10 @@ export interface ProjectEntry {
     /** Relative path from the monorepo root (e.g. "packages/foo") */
     path: string;
 }
+export interface LoadProjectEntriesOptions {
+    /** Suppress parse/read diagnostics for best-effort callers such as MCP initialization. */
+    quiet?: boolean;
+}
 /**
  * Get the full path to the projects.json file
  */
@@ -16,7 +20,7 @@ export declare function getProjectsPath(projectRoot: string): string;
  * Returns an empty array if the file doesn't exist or is malformed.
  * Legacy plain-string entries are automatically converted.
  */
-export declare function loadProjectEntries(projectRoot: string): ProjectEntry[];
+export declare function loadProjectEntries(projectRoot: string, options?: LoadProjectEntriesOptions): ProjectEntry[];
 /**
  * Load registered project paths (string array).
  * Kept for backwards compatibility with internal callers that only need paths.

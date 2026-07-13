@@ -21,6 +21,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { CodeGraph } from '../src';
 import { ToolHandler } from '../src/mcp/tools';
+import { saveProjects } from '../src/projects';
 
 const BIN = path.resolve(__dirname, '../dist/bin/codegraph.js');
 
@@ -126,6 +127,45 @@ describe('No-root-index session policy', () => {
     // ...but it is NOT the full single-project playbook (that's sent only when
     // the root itself is indexed — keeps the common case tight).
     expect(instructions).not.toMatch(/## How to query/);
+  });
+
+  it('initialize injects registered projects for an unindexed monorepo root', async () => {
+    const api = path.join(tempDir, 'services', 'api');
+    const web = path.join(tempDir, 'apps', 'web');
+    fs.mkdirSync(web, { recursive: true });
+    const cg = CodeGraph.initSync(api);
+    cg.close();
+    saveProjects(tempDir, [
+      { name: 'web', path: 'apps/web' },
+      { name: 'api', path: 'services/api' },
+    ]);
+
+    child = spawnServer(tempDir);
+    const res = await request(child, { id: 0, method: 'initialize', params: initializeParams(tempDir) });
+    const instructions = (res.result as { instructions: string }).instructions;
+
+    expect(instructions).not.toMatch(/## How to query/);
+    expect(instructions).toContain('## Registered CodeGraph monorepo projects');
+    expect(instructions).toContain(`name=${JSON.stringify('api')} projectPath=${JSON.stringify(api)} status=indexed`);
+    expect(instructions).toContain(`name=${JSON.stringify('web')} projectPath=${JSON.stringify(web)} status=not-indexed`);
+  });
+
+  it('initialize marks the current registered child while keeping the full playbook', async () => {
+    const api = path.join(tempDir, 'services', 'api');
+    const sourceDir = path.join(api, 'src');
+    fs.mkdirSync(sourceDir, { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, 'index.ts'), 'export const api = true;\n');
+    const cg = CodeGraph.initSync(api);
+    cg.close();
+    saveProjects(tempDir, [{ name: 'api', path: 'services/api' }]);
+
+    child = spawnServer(tempDir);
+    const res = await request(child, { id: 0, method: 'initialize', params: initializeParams(sourceDir) });
+    const instructions = (res.result as { instructions: string }).instructions;
+
+    expect(instructions).toMatch(/## How to query/);
+    expect(instructions).toContain('## Registered CodeGraph monorepo projects');
+    expect(instructions).toContain(`Current registered project: ${JSON.stringify('api')}`);
   });
 
   it('tools/list exposes the tools even when the server root has no index (#964)', async () => {
