@@ -261,6 +261,14 @@ describe('Shared MCP daemon (issue #411)', () => {
     });
     const secondResp = await waitFor(() => findResponse(second.stdout, 22), 10000);
 
+    await waitFor(() => first.stderr.some((line) => line.includes('Attached to shared daemon')), 8000);
+    await waitFor(() => second.stderr.some((line) => line.includes('Attached to shared daemon')), 8000);
+    await waitFor(() => (readLockPid(realRoot) ?? 0) > 0, 8000);
+    const daemonPid = readLockPid(realRoot);
+    expect(daemonPid).toBeTruthy();
+    expect(isAlive(daemonPid!)).toBe(true);
+    expect(countListeningLines(realRoot)).toBe(1);
+
     expect(firstResp.result.instructions).toContain('## Registered CodeGraph monorepo projects');
     expect(firstResp.result.instructions).toContain('Current registered project: "api"');
     expect(firstResp.result.instructions).not.toContain('Current registered project: "web"');

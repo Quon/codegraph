@@ -75,9 +75,31 @@ export function loadProjectEntries(
 ): ProjectEntry[] {
   const filePath = getProjectsPath(projectRoot);
   try {
-    if (!fs.existsSync(filePath)) return [];
-    if (options.maxBytes !== undefined && fs.statSync(filePath).size > options.maxBytes) return [];
-    const content = fs.readFileSync(filePath, 'utf-8');
+    let content: string;
+    if (options.maxBytes !== undefined) {
+      const maxBytes = Math.max(0, Math.floor(options.maxBytes));
+      let fd: number | null = null;
+      try {
+        fd = fs.openSync(filePath, 'r');
+        if (fs.fstatSync(fd).size > maxBytes) return [];
+
+        const buffer = Buffer.alloc(maxBytes + 1);
+        let bytesRead = 0;
+        while (bytesRead < buffer.length) {
+          const count = fs.readSync(fd, buffer, bytesRead, buffer.length - bytesRead, null);
+          if (count === 0) break;
+          bytesRead += count;
+        }
+        if (bytesRead > maxBytes) return [];
+        content = buffer.toString('utf8', 0, bytesRead);
+      } finally {
+        if (fd !== null) fs.closeSync(fd);
+      }
+    } else {
+      // Preserve the ordinary loader's existing missing-file and diagnostic semantics.
+      if (!fs.existsSync(filePath)) return [];
+      content = fs.readFileSync(filePath, 'utf-8');
+    }
     const parsed = JSON.parse(content);
     if (!Array.isArray(parsed)) return [];
     return parsed.map(parseEntry).filter((e): e is ProjectEntry => e !== null);

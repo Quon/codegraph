@@ -110,21 +110,37 @@ function buildMonorepoInstructions(candidatePath) {
         const candidates = [...byPath.values()].sort((a, b) => a.name.localeCompare(b.name) || a.projectPath.localeCompare(b.projectPath));
         if (candidates.length === 0)
             return '';
-        // Status checks are the only per-project filesystem work after the single
-        // bounded registry read. Limit them to records that can actually appear.
-        const projects = candidates
-            .slice(0, exports.MAX_MONOREPO_PROJECTS)
-            .map((project) => ({ ...project, indexed: (0, directory_1.isInitialized)(project.projectPath) }));
         const resolvedCandidate = path.resolve(candidatePath);
-        const current = projects
+        const currentCandidate = candidates
             .filter((project) => isAtOrBelow(project.projectPath, resolvedCandidate))
             .sort((a, b) => b.projectPath.length - a.projectPath.length)[0];
+        // Reserve a display slot for the current project even when it sorts after
+        // the first page. Status checks remain limited to the final display set.
+        let displayCandidates = candidates.slice(0, exports.MAX_MONOREPO_PROJECTS);
+        if (currentCandidate && !displayCandidates.includes(currentCandidate)) {
+            displayCandidates = [
+                ...candidates.slice(0, exports.MAX_MONOREPO_PROJECTS - 1),
+                currentCandidate,
+            ].sort((a, b) => a.name.localeCompare(b.name) || a.projectPath.localeCompare(b.projectPath));
+        }
+        const projects = displayCandidates
+            .map((project) => ({ ...project, indexed: (0, directory_1.isInitialized)(project.projectPath) }));
+        const current = currentCandidate
+            ? projects.find((project) => dedupeKey(project.projectPath) === dedupeKey(currentCandidate.projectPath))
+            : undefined;
         let included = projects;
         while (included.length > 0) {
             const text = render(monorepoRoot, current, included, candidates.length - included.length);
             if (text.length <= exports.MAX_MONOREPO_INSTRUCTIONS_CHARS)
                 return text;
-            included = included.slice(0, -1);
+            let removable = included.length - 1;
+            while (removable >= 0 && included[removable] === current)
+                removable--;
+            // The current record's full projectPath is mandatory. If it alone cannot
+            // fit, omit the appendix instead of emitting a marker without its path.
+            if (removable < 0)
+                return '';
+            included = included.filter((_, index) => index !== removable);
         }
         const text = render(monorepoRoot, current, [], candidates.length);
         return text.length <= exports.MAX_MONOREPO_INSTRUCTIONS_CHARS ? text : '';
