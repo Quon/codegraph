@@ -1,6 +1,6 @@
 import * as path from 'path';
 import { isInitialized } from '../directory';
-import { findNearestMonorepoRoot, loadProjectEntries } from '../projects';
+import { loadProjectEntries, type ProjectEntry } from '../projects';
 
 export const MAX_MONOREPO_PROJECTS = 100;
 export const MAX_MONOREPO_INSTRUCTIONS_CHARS = 16 * 1024;
@@ -10,6 +10,27 @@ interface ResolvedProject {
   name: string;
   projectPath: string;
   indexed: boolean;
+}
+
+interface MonorepoRegistry {
+  root: string;
+  entries: ProjectEntry[];
+}
+
+function findNearestMonorepoRegistry(startPath: string): MonorepoRegistry | null {
+  let current = path.resolve(startPath);
+  const fsRoot = path.parse(current).root;
+
+  while (current !== fsRoot) {
+    const entries = loadProjectEntries(current, { quiet: true });
+    if (entries.length > 0) return { root: current, entries };
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
+  const entries = loadProjectEntries(current, { quiet: true });
+  return entries.length > 0 ? { root: current, entries } : null;
 }
 
 function isAtOrBelow(root: string, candidate: string): boolean {
@@ -63,11 +84,12 @@ function render(
 
 export function buildMonorepoInstructions(candidatePath: string): string {
   try {
-    const monorepoRoot = findNearestMonorepoRoot(candidatePath);
-    if (!monorepoRoot) return '';
+    const registry = findNearestMonorepoRegistry(candidatePath);
+    if (!registry) return '';
+    const { root: monorepoRoot, entries } = registry;
 
     const byPath = new Map<string, ResolvedProject>();
-    for (const entry of loadProjectEntries(monorepoRoot)) {
+    for (const entry of entries) {
       const projectPath = path.resolve(monorepoRoot, entry.path);
       if (!isAtOrBelow(monorepoRoot, projectPath)) continue;
       byPath.set(dedupeKey(projectPath), {

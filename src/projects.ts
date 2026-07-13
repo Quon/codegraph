@@ -23,6 +23,11 @@ export interface ProjectEntry {
   path: string;
 }
 
+export interface LoadProjectEntriesOptions {
+  /** Suppress parse/read diagnostics for best-effort callers such as MCP initialization. */
+  quiet?: boolean;
+}
+
 /**
  * Derive a project name from its relative path (last non-empty segment).
  * "packages/foo" → "foo", "apps/web" → "web"
@@ -62,7 +67,10 @@ export function getProjectsPath(projectRoot: string): string {
  * Returns an empty array if the file doesn't exist or is malformed.
  * Legacy plain-string entries are automatically converted.
  */
-export function loadProjectEntries(projectRoot: string): ProjectEntry[] {
+export function loadProjectEntries(
+  projectRoot: string,
+  options: LoadProjectEntriesOptions = {},
+): ProjectEntry[] {
   const filePath = getProjectsPath(projectRoot);
   try {
     if (!fs.existsSync(filePath)) return [];
@@ -71,9 +79,11 @@ export function loadProjectEntries(projectRoot: string): ProjectEntry[] {
     if (!Array.isArray(parsed)) return [];
     return parsed.map(parseEntry).filter((e): e is ProjectEntry => e !== null);
   } catch (err) {
-    process.stderr.write(
-      `[CodeGraph] Failed to load projects.json: ${err instanceof Error ? err.message : String(err)}\n`
-    );
+    if (!options.quiet) {
+      process.stderr.write(
+        `[CodeGraph] Failed to load projects.json: ${err instanceof Error ? err.message : String(err)}\n`
+      );
+    }
     return [];
   }
 }

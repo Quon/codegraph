@@ -1,13 +1,23 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { saveProjects } from '../src/projects';
+import { loadProjectEntries, saveProjects } from '../src/projects';
 import {
   buildMonorepoInstructions,
   MAX_MONOREPO_INSTRUCTIONS_CHARS,
   MAX_MONOREPO_PROJECTS,
 } from '../src/mcp/monorepo-instructions';
+
+const fsMock = vi.hoisted(() => ({
+  actualReadFileSync: undefined as typeof import('fs').readFileSync | undefined,
+  readFileSync: vi.fn(),
+}));
+vi.mock('fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('fs')>();
+  fsMock.actualReadFileSync = actual.readFileSync;
+  return { ...actual, readFileSync: fsMock.readFileSync };
+});
 
 function markIndexed(root: string): void {
   const dir = path.join(root, '.codegraph');
@@ -19,10 +29,15 @@ describe('MCP monorepo instructions', () => {
   let root: string;
 
   beforeEach(() => {
+    fsMock.readFileSync.mockImplementation((...args: unknown[]) => (
+      fsMock.actualReadFileSync!(...(args as [fs.PathOrFileDescriptor, BufferEncoding]))
+    ));
+    fsMock.readFileSync.mockClear();
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-mcp-monorepo-'));
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
@@ -46,6 +61,19 @@ describe('MCP monorepo instructions', () => {
     expect(text).toContain(`name=${JSON.stringify('web')} projectPath=${JSON.stringify(web)} status=not-indexed`);
     expect(text.indexOf('name="api"')).toBeLessThan(text.indexOf('name="web"'));
     expect(text).toContain('set projectPath to the absolute path');
+  });
+
+  it('reads the selected registry only once', () => {
+    const api = path.join(root, 'services', 'api');
+    fs.mkdirSync(api, { recursive: true });
+    saveProjects(root, [{ name: 'api', path: 'services/api' }]);
+    const registryPath = path.join(root, '.codegraph', 'projects.json');
+    buildMonorepoInstructions(api);
+
+    const registryReads = fsMock.readFileSync.mock.calls.filter(
+      ([file]) => path.resolve(String(file)) === registryPath,
+    );
+    expect(registryReads).toHaveLength(1);
   });
 
   it('marks the deepest registered project containing the candidate path', () => {
@@ -101,6 +129,27 @@ describe('MCP monorepo instructions', () => {
     const registryDir = path.join(root, '.codegraph');
     fs.mkdirSync(registryDir, { recursive: true });
     fs.writeFileSync(path.join(registryDir, 'projects.json'), '{not-json');
+    const stderrWrite = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     expect(buildMonorepoInstructions(root)).toBe('');
+    expect(stderrWrite).not.toHaveBeenCalled();
+  });
+
+  it('degrades silently when projects.json cannot be read', () => {
+    const registryDir = path.join(root, '.codegraph');
+    fs.mkdirSync(path.join(registryDir, 'projects.json'), { recursive: true });
+    const stderrWrite = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    expect(buildMonorepoInstructions(root)).toBe('');
+    expect(stderrWrite).not.toHaveBeenCalled();
+  });
+
+  it('preserves diagnostics for default registry loads', () => {
+    const registryDir = path.join(root, '.codegraph');
+    fs.mkdirSync(registryDir, { recursive: true });
+    fs.writeFileSync(path.join(registryDir, 'projects.json'), '{not-json');
+    const stderrWrite = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    expect(loadProjectEntries(root)).toEqual([]);
+    expect(stderrWrite).toHaveBeenCalledOnce();
   });
 });
