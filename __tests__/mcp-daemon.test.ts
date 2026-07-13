@@ -39,6 +39,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { CodeGraph } from '../src';
 import { getDaemonSocketPath } from '../src/mcp/daemon-paths';
+import { saveProjects } from '../src/projects';
 
 const BIN = path.resolve(__dirname, '../dist/bin/codegraph.js');
 
@@ -229,6 +230,42 @@ describe('Shared MCP daemon (issue #411)', () => {
     // Exactly one daemon ever bound, and it's the same pid both attached to.
     expect(countListeningLines(realRoot)).toBe(1);
     expect(readLockPid(realRoot)).toBe(daemonPid);
+  }, 40000);
+
+  it('local proxy initialize uses each session root to build monorepo instructions', async () => {
+    const api = path.join(tempDir, 'services', 'api');
+    const web = path.join(tempDir, 'apps', 'web');
+    fs.mkdirSync(api, { recursive: true });
+    fs.mkdirSync(web, { recursive: true });
+    saveProjects(tempDir, [
+      { name: 'api', path: 'services/api' },
+      { name: 'web', path: 'apps/web' },
+    ]);
+
+    const first = spawnServer(tempDir, { CODEGRAPH_DAEMON_IDLE_TIMEOUT_MS: '15000' });
+    servers.push(first);
+    sendInitialize(first.child, `file://${api}`, 21);
+    const firstResp = await waitFor(() => findResponse(first.stdout, 21), 10000);
+
+    const second = spawnServer(tempDir, { CODEGRAPH_DAEMON_IDLE_TIMEOUT_MS: '15000' });
+    servers.push(second);
+    sendMessage(second.child, {
+      jsonrpc: '2.0',
+      id: 22,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        workspaceFolders: [{ uri: `file://${web}`, name: 'web' }],
+      },
+    });
+    const secondResp = await waitFor(() => findResponse(second.stdout, 22), 10000);
+
+    expect(firstResp.result.instructions).toContain('## Registered CodeGraph monorepo projects');
+    expect(firstResp.result.instructions).toContain('Current registered project: "api"');
+    expect(firstResp.result.instructions).not.toContain('Current registered project: "web"');
+    expect(secondResp.result.instructions).toContain('Current registered project: "web"');
+    expect(secondResp.result.instructions).not.toContain('Current registered project: "api"');
   }, 40000);
 
   it('concurrent launchers converge on a single daemon (lockfile race — must-fix 1)', async () => {

@@ -66,7 +66,7 @@ const startup_handshake_1 = require("./startup-handshake");
 const stdin_teardown_1 = require("./stdin-teardown");
 const version_1 = require("./version");
 const session_1 = require("./session");
-const server_instructions_1 = require("./server-instructions");
+const initialize_instructions_1 = require("./initialize-instructions");
 const tools_1 = require("./tools");
 const telemetry_1 = require("../telemetry");
 /** Default poll cadence for the PPID watchdog (same as the direct server). */
@@ -195,8 +195,9 @@ function sendClientHello(socket) {
 /**
  * Local-handshake proxy (the cold-start fix).
  *
- * Answers `initialize` + `tools/list` from STATIC constants the instant the
- * client asks — tools register in ~process-startup time instead of waiting
+ * Answers `initialize` + `tools/list` locally from static protocol data plus
+ * bounded synchronous workspace metadata — tools register in ~process-startup
+ * time instead of waiting
  * ~600ms for the daemon to spawn+bind, which is what produced the "No such tool
  * available" race that made headless agents flail into grep/Read. Tool CALLS are
  * forwarded to the shared daemon (connected in the background); the daemon's
@@ -333,7 +334,8 @@ async function runLocalHandshakeProxy(deps) {
                         version: typeof initParams.clientInfo.version === 'string' ? initParams.clientInfo.version : undefined,
                     };
                 }
-                writeClient({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: session_1.PROTOCOL_VERSION, capabilities: { tools: {} }, serverInfo: session_1.SERVER_INFO, instructions: server_instructions_1.SERVER_INSTRUCTIONS } });
+                const { instructions } = (0, initialize_instructions_1.buildInitializeInstructionContext)(initParams, deps.root);
+                writeClient({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: session_1.PROTOCOL_VERSION, capabilities: { tools: {} }, serverInfo: session_1.SERVER_INFO, instructions } });
                 routeToDaemon(line); // prime the daemon so it resolves the project (its reply is suppressed below)
             }
             else if (msg.method === 'tools/list') {

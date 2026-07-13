@@ -12,49 +12,13 @@
  * issue #411 split it out — the same regression tests in
  * `__tests__/mcp-initialize.test.ts` still drive this code path.
  */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MCPSession = exports.PROTOCOL_VERSION = exports.SERVER_INFO = void 0;
-const path = __importStar(require("path"));
 const transport_1 = require("./transport");
 const tools_1 = require("./tools");
-const server_instructions_1 = require("./server-instructions");
 const version_1 = require("./version");
-const directory_1 = require("../directory");
 const telemetry_1 = require("../telemetry");
-const monorepo_instructions_1 = require("./monorepo-instructions");
+const initialize_instructions_1 = require("./initialize-instructions");
 /**
  * MCP Server Info — kept on the session because some clients log it. The
  * version tracks the real package version (was a hard-coded '0.1.0').
@@ -76,19 +40,6 @@ const ROOTS_LIST_TIMEOUT_MS = 5000;
  * Convert a file:// URI to a filesystem path. Handles URL encoding and
  * Windows drive letter paths.
  */
-function fileUriToPath(uri) {
-    try {
-        const url = new URL(uri);
-        let filePath = decodeURIComponent(url.pathname);
-        if (process.platform === 'win32' && /^\/[a-zA-Z]:/.test(filePath)) {
-            filePath = filePath.slice(1);
-        }
-        return path.resolve(filePath);
-    }
-    catch {
-        return uri.replace(/^file:\/\/\/?/, '');
-    }
-}
 /** First usable filesystem path from a `roots/list` result, or null. */
 function firstRootPath(result) {
     if (!result || typeof result !== 'object')
@@ -99,7 +50,7 @@ function firstRootPath(result) {
     const first = roots[0];
     if (typeof first?.uri !== 'string')
         return null;
-    return fileUriToPath(first.uri);
+    return (0, initialize_instructions_1.fileUriToPath)(first.uri);
 }
 /**
  * One MCP client's view of the server. Created fresh per stdio launch
@@ -194,16 +145,7 @@ class MCPSession {
         // workspaceFolders (LSP-style), else the --path the server was launched
         // with. cwd is NOT used here — we defer it so a roots/list answer can
         // win over it. See issue #196.
-        let explicitPath = null;
-        if (params?.rootUri) {
-            explicitPath = fileUriToPath(params.rootUri);
-        }
-        else if (params?.workspaceFolders?.[0]?.uri) {
-            explicitPath = fileUriToPath(params.workspaceFolders[0].uri);
-        }
-        else if (this.explicitProjectPath) {
-            explicitPath = this.explicitProjectPath;
-        }
+        const explicitPath = (0, initialize_instructions_1.resolveInitializeExplicitPath)(params) ?? this.explicitProjectPath;
         // Pick the instructions variant by the root's index state — a cheap
         // synchronous walk-up (existsSync loop only, no DB open, so the #172
         // respond-fast contract holds). When the root IS indexed, send the full
@@ -215,13 +157,7 @@ class MCPSession {
         // surfaced the tools after a mid-session `codegraph init`. When no explicit
         // path is known yet (roots/list dance pending), cwd is the best predictor of
         // where the default project will resolve.
-        const candidatePath = explicitPath ?? process.cwd();
-        const indexed = (0, directory_1.findNearestCodeGraphRoot)(candidatePath) !== null;
-        const baseInstructions = indexed ? server_instructions_1.SERVER_INSTRUCTIONS : server_instructions_1.SERVER_INSTRUCTIONS_NO_ROOT_INDEX;
-        const monorepoInstructions = (0, monorepo_instructions_1.buildMonorepoInstructions)(candidatePath);
-        const instructions = monorepoInstructions
-            ? `${baseInstructions.trimEnd()}\n\n${monorepoInstructions}`
-            : baseInstructions;
+        const { instructions } = (0, initialize_instructions_1.buildInitializeInstructionContext)(params, this.explicitProjectPath ?? process.cwd());
         // Respond to the handshake BEFORE doing any heavy init — see issue #172.
         this.transport.sendResult(request.id, {
             protocolVersion: exports.PROTOCOL_VERSION,

@@ -73,8 +73,9 @@ export interface LocalHandshakeDeps {
 /**
  * Local-handshake proxy (the cold-start fix).
  *
- * Answers `initialize` + `tools/list` from STATIC constants the instant the
- * client asks — tools register in ~process-startup time instead of waiting
+ * Answers `initialize` + `tools/list` locally from static protocol data plus
+ * bounded synchronous workspace metadata — tools register in ~process-startup
+ * time instead of waiting
  * ~600ms for the daemon to spawn+bind, which is what produced the "No such tool
  * available" race that made headless agents flail into grep/Read. Tool CALLS are
  * forwarded to the shared daemon (connected in the background); the daemon's

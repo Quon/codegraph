@@ -1,1 +1,1 @@
-{"version":3,"file":"monorepo-instructions.d.ts","sourceRoot":"","sources":["../../src/mcp/monorepo-instructions.ts"],"names":[],"mappings":"AAIA,eAAO,MAAM,qBAAqB,MAAM,CAAC;AACzC,eAAO,MAAM,+BAA+B,QAAY,CAAC;AA+EzD,wBAAgB,yBAAyB,CAAC,aAAa,EAAE,MAAM,GAAG,MAAM,CAqCvE"}
+{"version":3,"file":"monorepo-instructions.d.ts","sourceRoot":"","sources":["../../src/mcp/monorepo-instructions.ts"],"names":[],"mappings":"AAIA,eAAO,MAAM,qBAAqB,MAAM,CAAC;AACzC,eAAO,MAAM,+BAA+B,QAAY,CAAC;AACzD,eAAO,MAAM,2BAA2B,QAAc,CAAC;AAiFvD,wBAAgB,yBAAyB,CAAC,aAAa,EAAE,MAAM,GAAG,MAAM,CA2CvE"}

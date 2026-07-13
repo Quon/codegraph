@@ -28,7 +28,7 @@ import { armStartupHandshakeTimeout } from './startup-handshake';
 import { treatStdinFailureAsShutdown } from './stdin-teardown';
 import { CodeGraphPackageVersion } from './version';
 import { SERVER_INFO, PROTOCOL_VERSION } from './session';
-import { SERVER_INSTRUCTIONS } from './server-instructions';
+import { buildInitializeInstructionContext } from './initialize-instructions';
 import { getStaticTools } from './tools';
 import { getTelemetry, ClientInfo } from '../telemetry';
 import type { MCPEngine } from './engine';
@@ -203,8 +203,9 @@ export interface LocalHandshakeDeps {
 /**
  * Local-handshake proxy (the cold-start fix).
  *
- * Answers `initialize` + `tools/list` from STATIC constants the instant the
- * client asks — tools register in ~process-startup time instead of waiting
+ * Answers `initialize` + `tools/list` locally from static protocol data plus
+ * bounded synchronous workspace metadata — tools register in ~process-startup
+ * time instead of waiting
  * ~600ms for the daemon to spawn+bind, which is what produced the "No such tool
  * available" race that made headless agents flail into grep/Read. Tool CALLS are
  * forwarded to the shared daemon (connected in the background); the daemon's
@@ -300,14 +301,19 @@ export async function runLocalHandshakeProxy(deps: LocalHandshakeDeps): Promise<
       let msg: JsonRpc; try { msg = JSON.parse(line) as JsonRpc; } catch { routeToDaemon(line); continue; }
       if (msg.method === 'initialize') {
         clientInitId = msg.id;
-        const initParams = (msg.params ?? {}) as { clientInfo?: { name?: unknown; version?: unknown } };
+        const initParams = (msg.params ?? {}) as {
+          rootUri?: string;
+          workspaceFolders?: Array<{ uri: string; name?: string }>;
+          clientInfo?: { name?: unknown; version?: unknown };
+        };
         if (initParams.clientInfo) {
           telemetryClient = {
             name: typeof initParams.clientInfo.name === 'string' ? initParams.clientInfo.name : undefined,
             version: typeof initParams.clientInfo.version === 'string' ? initParams.clientInfo.version : undefined,
           };
         }
-        writeClient({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: PROTOCOL_VERSION, capabilities: { tools: {} }, serverInfo: SERVER_INFO, instructions: SERVER_INSTRUCTIONS } });
+        const { instructions } = buildInitializeInstructionContext(initParams, deps.root);
+        writeClient({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: PROTOCOL_VERSION, capabilities: { tools: {} }, serverInfo: SERVER_INFO, instructions } });
         routeToDaemon(line); // prime the daemon so it resolves the project (its reply is suppressed below)
       } else if (msg.method === 'tools/list') {
         writeClient({ jsonrpc: '2.0', id: msg.id, result: { tools: getStaticTools() } });

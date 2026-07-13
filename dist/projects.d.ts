@@ -10,6 +10,8 @@ export interface ProjectEntry {
 export interface LoadProjectEntriesOptions {
     /** Suppress parse/read diagnostics for best-effort callers such as MCP initialization. */
     quiet?: boolean;
+    /** Refuse to read registries larger than this many bytes. Unbounded by default. */
+    maxBytes?: number;
 }
 /**
  * Get the full path to the projects.json file

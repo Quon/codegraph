@@ -12,15 +12,16 @@
  * `__tests__/mcp-initialize.test.ts` still drive this code path.
  */
 
-import * as path from 'path';
 import { JsonRpcRequest, JsonRpcNotification, JsonRpcTransport, ErrorCodes } from './transport';
 import { MCPEngine } from './engine';
 import { tools } from './tools';
-import { SERVER_INSTRUCTIONS, SERVER_INSTRUCTIONS_NO_ROOT_INDEX } from './server-instructions';
 import { CodeGraphPackageVersion } from './version';
-import { findNearestCodeGraphRoot } from '../directory';
 import { getTelemetry, ClientInfo } from '../telemetry';
-import { buildMonorepoInstructions } from './monorepo-instructions';
+import {
+  buildInitializeInstructionContext,
+  fileUriToPath,
+  resolveInitializeExplicitPath,
+} from './initialize-instructions';
 
 /**
  * MCP Server Info — kept on the session because some clients log it. The
@@ -46,19 +47,6 @@ const ROOTS_LIST_TIMEOUT_MS = 5000;
  * Convert a file:// URI to a filesystem path. Handles URL encoding and
  * Windows drive letter paths.
  */
-function fileUriToPath(uri: string): string {
-  try {
-    const url = new URL(uri);
-    let filePath = decodeURIComponent(url.pathname);
-    if (process.platform === 'win32' && /^\/[a-zA-Z]:/.test(filePath)) {
-      filePath = filePath.slice(1);
-    }
-    return path.resolve(filePath);
-  } catch {
-    return uri.replace(/^file:\/\/\/?/, '');
-  }
-}
-
 /** First usable filesystem path from a `roots/list` result, or null. */
 function firstRootPath(result: unknown): string | null {
   if (!result || typeof result !== 'object') return null;
@@ -181,14 +169,7 @@ export class MCPSession {
     // workspaceFolders (LSP-style), else the --path the server was launched
     // with. cwd is NOT used here — we defer it so a roots/list answer can
     // win over it. See issue #196.
-    let explicitPath: string | null = null;
-    if (params?.rootUri) {
-      explicitPath = fileUriToPath(params.rootUri);
-    } else if (params?.workspaceFolders?.[0]?.uri) {
-      explicitPath = fileUriToPath(params.workspaceFolders[0].uri);
-    } else if (this.explicitProjectPath) {
-      explicitPath = this.explicitProjectPath;
-    }
+    const explicitPath = resolveInitializeExplicitPath(params) ?? this.explicitProjectPath;
 
     // Pick the instructions variant by the root's index state — a cheap
     // synchronous walk-up (existsSync loop only, no DB open, so the #172
@@ -201,13 +182,10 @@ export class MCPSession {
     // surfaced the tools after a mid-session `codegraph init`. When no explicit
     // path is known yet (roots/list dance pending), cwd is the best predictor of
     // where the default project will resolve.
-    const candidatePath = explicitPath ?? process.cwd();
-    const indexed = findNearestCodeGraphRoot(candidatePath) !== null;
-    const baseInstructions = indexed ? SERVER_INSTRUCTIONS : SERVER_INSTRUCTIONS_NO_ROOT_INDEX;
-    const monorepoInstructions = buildMonorepoInstructions(candidatePath);
-    const instructions = monorepoInstructions
-      ? `${baseInstructions.trimEnd()}\n\n${monorepoInstructions}`
-      : baseInstructions;
+    const { instructions } = buildInitializeInstructionContext(
+      params,
+      this.explicitProjectPath ?? process.cwd(),
+    );
 
     // Respond to the handshake BEFORE doing any heavy init — see issue #172.
     this.transport.sendResult(request.id, {

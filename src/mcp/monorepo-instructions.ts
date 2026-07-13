@@ -4,6 +4,7 @@ import { loadProjectEntries, type ProjectEntry } from '../projects';
 
 export const MAX_MONOREPO_PROJECTS = 100;
 export const MAX_MONOREPO_INSTRUCTIONS_CHARS = 16 * 1024;
+export const MAX_MONOREPO_REGISTRY_BYTES = 1024 * 1024;
 const MAX_PROJECT_NAME_CHARS = 160;
 
 interface ResolvedProject {
@@ -11,6 +12,8 @@ interface ResolvedProject {
   projectPath: string;
   indexed: boolean;
 }
+
+type ProjectCandidate = Omit<ResolvedProject, 'indexed'>;
 
 interface MonorepoRegistry {
   root: string;
@@ -22,14 +25,14 @@ function findNearestMonorepoRegistry(startPath: string): MonorepoRegistry | null
   const fsRoot = path.parse(current).root;
 
   while (current !== fsRoot) {
-    const entries = loadProjectEntries(current, { quiet: true });
+    const entries = loadProjectEntries(current, { quiet: true, maxBytes: MAX_MONOREPO_REGISTRY_BYTES });
     if (entries.length > 0) return { root: current, entries };
     const parent = path.dirname(current);
     if (parent === current) break;
     current = parent;
   }
 
-  const entries = loadProjectEntries(current, { quiet: true });
+  const entries = loadProjectEntries(current, { quiet: true, maxBytes: MAX_MONOREPO_REGISTRY_BYTES });
   return entries.length > 0 ? { root: current, entries } : null;
 }
 
@@ -88,34 +91,40 @@ export function buildMonorepoInstructions(candidatePath: string): string {
     if (!registry) return '';
     const { root: monorepoRoot, entries } = registry;
 
-    const byPath = new Map<string, ResolvedProject>();
+    const byPath = new Map<string, ProjectCandidate>();
     for (const entry of entries) {
       const projectPath = path.resolve(monorepoRoot, entry.path);
       if (!isAtOrBelow(monorepoRoot, projectPath)) continue;
       byPath.set(dedupeKey(projectPath), {
         name: entry.name,
         projectPath,
-        indexed: isInitialized(projectPath),
       });
     }
 
-    const projects = [...byPath.values()].sort(
+    const candidates = [...byPath.values()].sort(
       (a, b) => a.name.localeCompare(b.name) || a.projectPath.localeCompare(b.projectPath),
     );
-    if (projects.length === 0) return '';
+    if (candidates.length === 0) return '';
+
+    // Status checks are the only per-project filesystem work after the single
+    // bounded registry read. Limit them to records that can actually appear.
+    const projects: ResolvedProject[] = candidates
+      .slice(0, MAX_MONOREPO_PROJECTS)
+      .map((project) => ({ ...project, indexed: isInitialized(project.projectPath) }));
 
     const resolvedCandidate = path.resolve(candidatePath);
     const current = projects
       .filter((project) => isAtOrBelow(project.projectPath, resolvedCandidate))
       .sort((a, b) => b.projectPath.length - a.projectPath.length)[0];
 
-    let included = projects.slice(0, MAX_MONOREPO_PROJECTS);
+    let included = projects;
     while (included.length > 0) {
-      const text = render(monorepoRoot, current, included, projects.length - included.length);
+      const text = render(monorepoRoot, current, included, candidates.length - included.length);
       if (text.length <= MAX_MONOREPO_INSTRUCTIONS_CHARS) return text;
       included = included.slice(0, -1);
     }
-    return render(monorepoRoot, current, [], projects.length);
+    const text = render(monorepoRoot, current, [], candidates.length);
+    return text.length <= MAX_MONOREPO_INSTRUCTIONS_CHARS ? text : '';
   } catch {
     return '';
   }

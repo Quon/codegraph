@@ -6,17 +6,29 @@ import { loadProjectEntries, saveProjects } from '../src/projects';
 import {
   buildMonorepoInstructions,
   MAX_MONOREPO_INSTRUCTIONS_CHARS,
+  MAX_MONOREPO_REGISTRY_BYTES,
   MAX_MONOREPO_PROJECTS,
 } from '../src/mcp/monorepo-instructions';
 
 const fsMock = vi.hoisted(() => ({
   actualReadFileSync: undefined as typeof import('fs').readFileSync | undefined,
+  actualExistsSync: undefined as typeof import('fs').existsSync | undefined,
+  actualStatSync: undefined as typeof import('fs').statSync | undefined,
   readFileSync: vi.fn(),
+  existsSync: vi.fn(),
+  statSync: vi.fn(),
 }));
 vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('fs')>();
   fsMock.actualReadFileSync = actual.readFileSync;
-  return { ...actual, readFileSync: fsMock.readFileSync };
+  fsMock.actualExistsSync = actual.existsSync;
+  fsMock.actualStatSync = actual.statSync;
+  return {
+    ...actual,
+    readFileSync: fsMock.readFileSync,
+    existsSync: fsMock.existsSync,
+    statSync: fsMock.statSync,
+  };
 });
 
 function markIndexed(root: string): void {
@@ -32,7 +44,11 @@ describe('MCP monorepo instructions', () => {
     fsMock.readFileSync.mockImplementation((...args: unknown[]) => (
       fsMock.actualReadFileSync!(...(args as [fs.PathOrFileDescriptor, BufferEncoding]))
     ));
+    fsMock.existsSync.mockImplementation((file: fs.PathLike) => fsMock.actualExistsSync!(file));
+    fsMock.statSync.mockImplementation((file: fs.PathLike) => fsMock.actualStatSync!(file));
     fsMock.readFileSync.mockClear();
+    fsMock.existsSync.mockClear();
+    fsMock.statSync.mockClear();
     root = fs.mkdtempSync(path.join(os.tmpdir(), 'codegraph-mcp-monorepo-'));
   });
 
@@ -123,6 +139,62 @@ describe('MCP monorepo instructions', () => {
     expect(text.length).toBeLessThanOrEqual(MAX_MONOREPO_INSTRUCTIONS_CHARS);
     expect(text).toMatch(/additional registered projects omitted/);
     expect(text.match(/projectPath=/g)?.length ?? 0).toBeLessThanOrEqual(MAX_MONOREPO_PROJECTS);
+  });
+
+  it('silently ignores a registry larger than the MCP byte budget', () => {
+    const registryDir = path.join(root, '.codegraph');
+    fs.mkdirSync(registryDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(registryDir, 'projects.json'),
+      JSON.stringify([{ name: 'huge', path: `packages/${'x'.repeat(MAX_MONOREPO_REGISTRY_BYTES)}` }]),
+    );
+    const stderrWrite = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    expect(buildMonorepoInstructions(root)).toBe('');
+    expect(stderrWrite).not.toHaveBeenCalled();
+  });
+
+  it('checks index state for at most the projects that can be displayed', () => {
+    saveProjects(root, Array.from({ length: MAX_MONOREPO_PROJECTS + 25 }, (_, i) => ({
+      name: `project-${String(i).padStart(3, '0')}`,
+      path: `packages/project-${i}`,
+    })));
+    fsMock.existsSync.mockClear();
+
+    buildMonorepoInstructions(root);
+
+    const dbChecks = fsMock.existsSync.mock.calls.filter(
+      ([file]) => String(file).endsWith(path.join('.codegraph', 'codegraph.db')),
+    );
+    expect(dbChecks.length).toBeLessThanOrEqual(MAX_MONOREPO_PROJECTS);
+  });
+
+  it('returns empty text when an oversized fixed header cannot fit the appendix budget', () => {
+    const candidate = path.resolve(root, ...Array.from({ length: 3000 }, () => 'segment'));
+    const registryPath = path.join(candidate, '.codegraph', 'projects.json');
+    const codegraphDir = path.join(candidate, '.codegraph');
+    const dbPath = path.join(codegraphDir, 'codegraph.db');
+    fsMock.existsSync.mockImplementation((file: fs.PathLike) => {
+      const value = path.resolve(String(file));
+      return value === registryPath || value === codegraphDir || value === dbPath;
+    });
+    fsMock.statSync.mockImplementation((file: fs.PathLike) => {
+      if (path.resolve(String(file)) === registryPath) {
+        return { size: 10 } as fs.Stats;
+      }
+      if (path.resolve(String(file)) === codegraphDir) {
+        return { isDirectory: () => true } as fs.Stats;
+      }
+      return fsMock.actualStatSync!(file);
+    });
+    fsMock.readFileSync.mockImplementation((file: fs.PathOrFileDescriptor) => {
+      if (path.resolve(String(file)) === registryPath) return JSON.stringify([{ name: 'root', path: '.' }]);
+      return fsMock.actualReadFileSync!(file, 'utf8');
+    });
+
+    const text = buildMonorepoInstructions(candidate);
+    expect(text).toBe('');
+    expect(text.length).toBeLessThanOrEqual(MAX_MONOREPO_INSTRUCTIONS_CHARS);
   });
 
   it('degrades to empty text for malformed projects.json', () => {

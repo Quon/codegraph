@@ -100,6 +100,8 @@ function loadProjectEntries(projectRoot, options = {}) {
     try {
         if (!fs.existsSync(filePath))
             return [];
+        if (options.maxBytes !== undefined && fs.statSync(filePath).size > options.maxBytes)
+            return [];
         const content = fs.readFileSync(filePath, 'utf-8');
         const parsed = JSON.parse(content);
         if (!Array.isArray(parsed))

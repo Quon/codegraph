@@ -26,6 +26,8 @@ export interface ProjectEntry {
 export interface LoadProjectEntriesOptions {
   /** Suppress parse/read diagnostics for best-effort callers such as MCP initialization. */
   quiet?: boolean;
+  /** Refuse to read registries larger than this many bytes. Unbounded by default. */
+  maxBytes?: number;
 }
 
 /**
@@ -74,6 +76,7 @@ export function loadProjectEntries(
   const filePath = getProjectsPath(projectRoot);
   try {
     if (!fs.existsSync(filePath)) return [];
+    if (options.maxBytes !== undefined && fs.statSync(filePath).size > options.maxBytes) return [];
     const content = fs.readFileSync(filePath, 'utf-8');
     const parsed = JSON.parse(content);
     if (!Array.isArray(parsed)) return [];
